@@ -82,6 +82,13 @@ impl EditorWorkspaces {
         {
             let path = folder.path();
             let uri_path = uri.path();
+            if !uri_path.starts_with(path)
+                || !(path.ends_with('/')
+                    || uri_path.len() == path.len()
+                    || uri_path.as_bytes().get(path.len()) == Some(&b'/'))
+            {
+                continue;
+            }
             let len = path
                 .chars()
                 .zip(uri_path.chars())
@@ -280,5 +287,26 @@ pub mod tests {
     #[test]
     fn workspace_root_is_the_empty_prefix() {
         assert_eq!(fixture("project").root().as_str(), "");
+    }
+
+    #[test]
+    fn unrelated_folder_cannot_be_guessed_as_a_workspace() {
+        let workspaces = super::EditorWorkspaces {
+            workspaces: std::sync::Arc::new(std::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            added: std::sync::Arc::new(tokio::sync::Notify::new()),
+        };
+        let workspace = fixture("project");
+        workspaces
+            .workspaces
+            .write()
+            .expect("lock")
+            .insert(workspace.url().clone(), workspace);
+        assert!(
+            workspaces
+                .guess_workspace(&Url::parse("file:///unrelated/file.sqf").expect("url"))
+                .is_none()
+        );
     }
 }

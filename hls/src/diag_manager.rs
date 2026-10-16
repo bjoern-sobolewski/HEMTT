@@ -38,7 +38,7 @@ impl DiagManager {
             *SINGLETON.write().expect("DiagManager poisoned") = MaybeUninit::new(Self {
                 worker: Arc::new(DiagWorker {
                     client,
-                    last_touched: DashMap::new(),
+                    last_touched: tokio::sync::Mutex::new(HashSet::new()),
                     current: Arc::new(DashMap::new()),
                 }),
             });
@@ -59,14 +59,14 @@ impl DiagManager {
         self.worker.clear_current(scope);
     }
 
-    pub fn sync(&self, scope: &str) {
-        self.worker.sync(scope);
+    pub async fn sync(&self, scope: &str) {
+        self.worker.sync(scope).await;
     }
 }
 
 pub struct DiagWorker {
     client: Client,
-    last_touched: DashMap<String, HashSet<Url>>,
+    last_touched: tokio::sync::Mutex<HashSet<Url>>,
     current: Arc<DashMap<(String, Url), Vec<Diagnostic>>>,
 }
 
@@ -86,12 +86,12 @@ impl DiagWorker {
         self.current.retain(|k, _| k.0 != scope);
     }
 
-    pub fn sync(&self, scope: &str) {
+    pub async fn sync(&self, _scope: &str) {
+        let mut last_touched = self.last_touched.lock().await;
         let mut touched = HashSet::new();
         let diags = self
             .current
             .iter()
-            .filter(|x| x.key().0.starts_with(scope))
             .map(|x| (x.key().1.clone(), x.value().clone()))
             .collect::<Vec<_>>();
         let mut diags_by_file = std::collections::HashMap::new();
@@ -103,13 +103,10 @@ impl DiagWorker {
                 .extend(diags);
         }
         let client = self.client.clone();
-        let last_touched = self
-            .last_touched
-            .insert(scope.to_string(), touched)
-            .unwrap_or_default();
-        tokio::spawn(async move {
+        let previous = std::mem::replace(&mut *last_touched, touched);
+        {
             // clear files with previous diagnostics
-            for url in last_touched {
+            for url in previous {
                 client
                     .publish_diagnostics(url.clone(), Vec::new(), None)
                     .await;
@@ -118,6 +115,6 @@ impl DiagWorker {
             for (url, diags) in diags_by_file {
                 client.publish_diagnostics(url, diags, None).await;
             }
-        });
+        }
     }
 }

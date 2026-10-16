@@ -65,7 +65,7 @@ fn check_addons(workspace: &EditorWorkspace, client: Client) {
             warn!("failed to get diag manager");
             return;
         };
-        dm.sync("config");
+        dm.sync("config").await;
         if let Err(e) = client.workspace_diagnostic_refresh().await {
             warn!("Failed to refresh diagnostics: {:?}", e);
         }
@@ -92,7 +92,7 @@ async fn check_addon(source: WorkspacePath, workspace: EditorWorkspace) {
     ) {
         Ok(processed) => {
             {
-                let workspace_files = WorkspaceFiles::new();
+                let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
                 let checked = hemtt_config::check::check(&processed, workspace.config().as_ref());
                 for code in &checked.codes {
                     let Some(diag) = code.diagnostic() else {
@@ -137,7 +137,7 @@ async fn check_addon(source: WorkspacePath, workspace: EditorWorkspace) {
             warn!("failed to parse config: {:?}", err);
             debug!("failed sources: {:?}", err_sources);
             if let hemtt_preprocessor::Error::Code(code) = err {
-                let workspace_files = WorkspaceFiles::new();
+                let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
                 if let Some(diag) = code.diagnostic() {
                     let lsp_diag = diag.to_lsp(&workspace_files);
                     for (file, diag) in lsp_diag {
@@ -181,7 +181,7 @@ pub async fn process(url: Url, client: Client) {
         return;
     };
     let project_change = url.as_str().contains(".toml");
-    let recheck_addons = {
+    let mut recheck_addons = {
         let cache = Cache::get();
         let files = cache.files.read().await;
         files
@@ -198,19 +198,25 @@ pub async fn process(url: Url, client: Client) {
             })
             .collect::<Vec<_>>()
     };
+    if !recheck_addons.contains(&saved)
+        && saved.exists().unwrap_or(false)
+        && hemtt_config::files::can_rapify(&saved).unwrap_or(false)
+    {
+        recheck_addons.push(saved);
+    }
     let mut futures = JoinSet::new();
     for path in recheck_addons {
         futures.spawn(check_addon(path.clone(), workspace.clone()));
     }
-    tokio::spawn(async move {
+    {
         futures.join_all().await;
         let Some(dm) = DiagManager::get() else {
             warn!("failed to get diag manager");
             return;
         };
-        dm.sync("config");
+        dm.sync("config").await;
         if let Err(e) = client.workspace_diagnostic_refresh().await {
             warn!("Failed to refresh diagnostics: {:?}", e);
         }
-    });
+    }
 }

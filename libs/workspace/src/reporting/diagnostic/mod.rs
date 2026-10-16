@@ -336,21 +336,26 @@ impl Diagnostic {
             let end = label.span.end;
             let start_line_index = files.line_index(&label.file, start).unwrap_or(0);
             let end_line_index = files.line_index(&label.file, end).unwrap_or(0);
+            let source = files.source(&label.file).unwrap_or_default();
+            let utf16_column = |line, byte: usize| {
+                let start = files
+                    .line_range(&label.file, line)
+                    .map_or(0, |range| range.start);
+                source
+                    .get(start..byte)
+                    .unwrap_or_default()
+                    .encode_utf16()
+                    .count() as u32
+            };
             #[allow(clippy::cast_possible_truncation)]
             let range = tower_lsp::lsp_types::Range {
                 start: tower_lsp::lsp_types::Position {
                     line: start_line_index as u32,
-                    character: files
-                        .column_number(&label.file, start_line_index, start)
-                        .unwrap_or(1) as u32
-                        - 1,
+                    character: utf16_column(start_line_index, start),
                 },
                 end: tower_lsp::lsp_types::Position {
                     line: end_line_index as u32,
-                    character: files
-                        .column_number(&label.file, end_line_index, end)
-                        .unwrap_or(1) as u32
-                        - 1,
+                    character: utf16_column(end_line_index, end),
                 },
             };
             diags.push((
@@ -441,5 +446,22 @@ mod tests {
         let path = file("line one\n");
         let diag = Diagnostic::new("X", "problem").with_label(Label::secondary(path, 0..8));
         assert_eq!(diag.to_lsp(&WorkspaceFiles::new()).len(), 1);
+    }
+
+    #[test]
+    fn unsaved_unicode_spans_use_snapshot_lines_and_utf16_columns() {
+        let path = file("short disk source");
+        let sources = crate::SourceDatabase::new();
+        sources.set_overlay(sources.file_id(&path), "\"😀\"; bad\n", 1);
+        let diag = Diagnostic::new("X", "problem").with_label(Label::primary(path, 8..11));
+        let lsp = diag.to_lsp(&WorkspaceFiles::with_sources(sources));
+        assert_eq!(
+            lsp[0].1.range.start,
+            tower_lsp::lsp_types::Position::new(0, 6)
+        );
+        assert_eq!(
+            lsp[0].1.range.end,
+            tower_lsp::lsp_types::Position::new(0, 9)
+        );
     }
 }

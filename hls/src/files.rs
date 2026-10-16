@@ -49,11 +49,19 @@ impl FileCache {
                 for change in changes {
                     if let Some(range) = change.range {
                         let start = rope.line_to_char(range.start.line as usize)
-                            + range.start.character as usize;
+                            + utf16_to_char(
+                                &rope.line(range.start.line as usize).to_string(),
+                                range.start.character as usize,
+                            );
                         let end = rope.line_to_char(range.end.line as usize)
-                            + range.end.character as usize;
+                            + utf16_to_char(
+                                &rope.line(range.end.line as usize).to_string(),
+                                range.end.character as usize,
+                            );
                         rope.remove(start..end);
                         rope.insert(start, change.text.as_str());
+                    } else {
+                        *rope = Rope::from_str(&change.text);
                     }
                 }
             }
@@ -62,5 +70,53 @@ impl FileCache {
 
     pub fn on_close(&self, url: &Url) {
         self.ropes.remove(url);
+    }
+}
+
+fn utf16_to_char(line: &str, offset: usize) -> usize {
+    let mut units = 0;
+    line.chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units <= offset
+        })
+        .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
+
+    #[test]
+    fn edits_use_utf16_and_accept_full_replacements() {
+        let cache = FileCache::get();
+        let uri = Url::parse("file:///unicode.sqf").expect("url");
+        cache.on_change(&TextDocumentItem {
+            uri: uri.clone(),
+            text: TextInformation::Full("\"😀\"; x = 1;"),
+            version: Some(1),
+        });
+        cache.on_change(&TextDocumentItem {
+            uri: uri.clone(),
+            text: TextInformation::Changes(vec![TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(0, 6), Position::new(0, 7))),
+                range_length: None,
+                text: "y".into(),
+            }]),
+            version: Some(2),
+        });
+        assert_eq!(cache.text(&uri).as_deref(), Some("\"😀\"; y = 1;"));
+        cache.on_change(&TextDocumentItem {
+            uri: uri.clone(),
+            text: TextInformation::Changes(vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "z = 2;".into(),
+            }]),
+            version: Some(3),
+        });
+        assert_eq!(cache.text(&uri).as_deref(), Some("z = 2;"));
+        cache.on_close(&uri);
     }
 }

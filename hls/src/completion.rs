@@ -39,12 +39,15 @@ pub async fn completion(
         .lines()
         .nth(position.position.line as usize)
         .map(|line| {
-            let line = line.trim_end();
-            if position.position.character as usize > line.len() {
-                line.to_string()
-            } else {
-                line[..position.position.character as usize].to_string()
-            }
+            // LSP columns count UTF-16 units, not UTF-8 byte offsets. Never
+            // slice through a Unicode code point when completing after text.
+            let mut units = 0;
+            line.chars()
+                .take_while(|c| {
+                    units += c.len_utf16();
+                    units <= position.position.character as usize
+                })
+                .collect::<String>()
         })
         .unwrap_or_default();
     let split: Vec<&str> = text_at_cursor.rsplit(' ').collect();
@@ -154,7 +157,29 @@ pub async fn completion(
                 )))
             }
         }
-        _ => Ok(None),
+        _ => {
+            let database = match SqfAnalyzer::get().get_database(&workspace) {
+                Ok(database) => database,
+                Err(_) => return Ok(None),
+            };
+            let prefix = prefix.to_lowercase();
+            Ok(Some(CompletionResponse::Array(
+                database
+                    .wiki()
+                    .commands()
+                    .iter()
+                    .filter(|(name, _)| name.to_lowercase().starts_with(&prefix))
+                    .map(|(_, command)| CompletionItem {
+                        label: command.name().to_string(),
+                        kind: Some(CompletionItemKind::KEYWORD),
+                        detail: Some(
+                            "Arma command; inspect hover for overloads and restrictions".into(),
+                        ),
+                        ..Default::default()
+                    })
+                    .collect(),
+            )))
+        }
     }
 }
 

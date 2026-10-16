@@ -90,7 +90,7 @@ fn check_addons(workspace: &EditorWorkspace, database: &Arc<Database>, client: C
             warn!("failed to get diag manager");
             return;
         };
-        dm.sync("sqf");
+        dm.sync("sqf").await;
         if let Err(e) = client.workspace_diagnostic_refresh().await {
             warn!("Failed to refresh diagnostics: {:?}", e);
         }
@@ -123,7 +123,7 @@ async fn check_sqf(
     ) {
         Ok(processed) => {
             {
-                let workspace_files = WorkspaceFiles::new();
+                let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
                 let checked = hemtt_sqf::check::check(
                     &processed,
                     workspace.config().as_ref(),
@@ -166,7 +166,7 @@ async fn check_sqf(
             warn!("failed to parse sqf: {:?}", err);
             debug!("failed sources: {:?}", err_sources);
             if let hemtt_preprocessor::Error::Code(code) = err {
-                let workspace_files = WorkspaceFiles::new();
+                let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
                 if let Some(diag) = code.diagnostic() {
                     let lsp_diag = diag.to_lsp(&workspace_files);
                     for (file, diag) in lsp_diag {
@@ -272,17 +272,17 @@ impl SqfAnalyzer {
                 database.clone(),
             ));
         }
-        tokio::spawn(async move {
+        {
             futures.join_all().await;
             let Some(dm) = DiagManager::get() else {
                 warn!("failed to get diag manager");
                 return;
             };
-            dm.sync("sqf");
+            dm.sync("sqf").await;
             if let Err(e) = client.workspace_diagnostic_refresh().await {
                 warn!("Failed to refresh diagnostics: {:?}", e);
             }
-        });
+        }
     }
 }
 

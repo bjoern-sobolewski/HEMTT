@@ -41,6 +41,7 @@ pub struct Command {
 #[derive(Debug)]
 struct Backend {
     client: Client,
+    analysis: tokio::sync::Mutex<()>,
 }
 
 #[tower_lsp::async_trait]
@@ -60,7 +61,7 @@ impl LanguageServer for Backend {
             server_info: None,
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::INCREMENTAL,
+                    TextDocumentSyncKind::FULL,
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 workspace: Some(WorkspaceServerCapabilities {
@@ -167,6 +168,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let _analysis = self.analysis.lock().await;
         let document = TextDocumentItem {
             uri: params.text_document.uri.clone(),
             text: TextInformation::Full(&params.text_document.text),
@@ -190,6 +192,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let _analysis = self.analysis.lock().await;
         let document = TextDocumentItem {
             text: TextInformation::Changes(params.content_changes),
             uri: params.text_document.uri,
@@ -202,9 +205,16 @@ impl LanguageServer for Backend {
                 .await;
         }
         SqfAnalyzer::get().on_change(&document).await;
+        ConfigAnalyzer::get()
+            .on_save(document.uri.clone(), self.client.clone())
+            .await;
+        SqfAnalyzer::get()
+            .on_save(document.uri.clone(), self.client.clone())
+            .await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let _analysis = self.analysis.lock().await;
         ConfigAnalyzer::get()
             .on_save(params.text_document.uri.clone(), self.client.clone())
             .await;
@@ -224,12 +234,26 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let _analysis = self.analysis.lock().await;
         FileCache::get().on_close(&params.text_document.uri);
         SourceSync::get().on_close(&params.text_document.uri);
         SqfAnalyzer::get().on_close(&params.text_document.uri);
         PreprocessorAnalyzer::get()
             .on_close(&params.text_document.uri)
             .await;
+        ConfigAnalyzer::get()
+            .on_save(params.text_document.uri.clone(), self.client.clone())
+            .await;
+        SqfAnalyzer::get()
+            .on_save(params.text_document.uri, self.client.clone())
+            .await;
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let _analysis = self.analysis.lock().await;
+        for change in params.changes {
+            self.resave(change.uri.as_str()).await;
+        }
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -351,15 +375,18 @@ async fn server() {
 
     let (read, write) = tokio::io::split(stream);
 
-    let (service, socket) = LspService::build(|client| Backend { client })
-        .custom_method("hemtt/audio/convert", Backend::audio_convert)
-        .custom_method("hemtt/p3d/json", Backend::p3d_json)
-        .custom_method("hemtt/paa/json", Backend::paa_json)
-        .custom_method("hemtt/paa/p3d", Backend::paa_p3d)
-        .custom_method("hemtt/paa/convert", Backend::paa_convert)
-        .custom_method("hemtt/processed", Backend::processed)
-        .custom_method("hemtt/sqf/compiled", Backend::sqf_compiled)
-        .custom_method("hemtt/rpt/locate", Backend::locate_rpt)
-        .finish();
+    let (service, socket) = LspService::build(|client| Backend {
+        client,
+        analysis: tokio::sync::Mutex::new(()),
+    })
+    .custom_method("hemtt/audio/convert", Backend::audio_convert)
+    .custom_method("hemtt/p3d/json", Backend::p3d_json)
+    .custom_method("hemtt/paa/json", Backend::paa_json)
+    .custom_method("hemtt/paa/p3d", Backend::paa_p3d)
+    .custom_method("hemtt/paa/convert", Backend::paa_convert)
+    .custom_method("hemtt/processed", Backend::processed)
+    .custom_method("hemtt/sqf/compiled", Backend::sqf_compiled)
+    .custom_method("hemtt/rpt/locate", Backend::locate_rpt)
+    .finish();
     Server::new(read, write, socket).serve(service).await;
 }

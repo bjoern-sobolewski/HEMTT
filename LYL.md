@@ -72,3 +72,30 @@ Do not put mission code, game headers or private game data into this public fork
 Keep upstream copyright/license files with distributed binaries. Future updates
 should rebase/merge upstream deliberately and rerun both upstream tests and the
 LiveYourLife worklist, preserving failures as failures.
+# Editor integration
+
+The LYL VS Code client is maintained in the LiveYourLife repository at
+`tools/vscode-lyl-sqf`, reusing this fork's `hls` server, protocol, grammars and
+language configurations. It adapts the repository's existing source mounts and
+reviewed command-context checks outside the general parser. Its VSIX bundles
+the Windows x64 language server with checksum/source pins and upstream notices.
+
+This fork additionally fixes editor-only gaps: lint dirty buffers and dependent
+includes, recheck config roots introduced after startup, restore diagnostics on
+close/disk changes, use overlay content and UTF-16 columns in diagnostic spans,
+accept full-buffer replacements and UTF-16 incremental edits, reject unrelated
+workspace guesses, and merge config/SQF diagnostics without one clearing the
+other. It adds native command completion alongside inherited macro/path
+completion. The server's TCP startup protocol is unchanged.
+
+Build the language server with:
+
+```powershell
+$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS='-C target-feature=+crt-static'
+cargo build -p hemtt-language-server --release --locked --target x86_64-pc-windows-msvc
+```
+
+Run `cargo test -p hemtt-language-server -p hemtt-workspace -p hemtt-preprocessor
+-p hemtt-sqf --locked` locally. On hosts inheriting `NO_COLOR`, clear it for
+snapshot tests. The client has additional real-LSP and packaged VS Code tests.
+Editor integration tests are static tooling tests, not native-engine evidence.

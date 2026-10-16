@@ -34,6 +34,7 @@ impl WorkspaceFile {
 #[derive(Default)]
 pub struct WorkspaceFiles {
     cache: RwLock<HashMap<WorkspacePath, WorkspaceFile>>,
+    sources: Option<crate::SourceDatabase>,
 }
 
 impl WorkspaceFiles {
@@ -42,6 +43,16 @@ impl WorkspaceFiles {
     pub fn new() -> Self {
         Self {
             cache: RwLock::new(HashMap::with_capacity(1024)),
+            sources: None,
+        }
+    }
+
+    /// Diagnostic spans refer to the analyzed snapshot, including unsaved text.
+    #[must_use]
+    pub fn with_sources(sources: crate::SourceDatabase) -> Self {
+        Self {
+            cache: RwLock::new(HashMap::new()),
+            sources: Some(sources),
         }
     }
 
@@ -54,7 +65,14 @@ impl WorkspaceFiles {
         cache
             .entry(file_id.clone())
             .or_insert_with(|| {
-                let source = file_id.read_to_string().unwrap_or_default();
+                let source = self
+                    .sources
+                    .as_ref()
+                    .and_then(|sources| sources.source_for_path(file_id).ok())
+                    .map_or_else(
+                        || file_id.read_to_string().unwrap_or_default(),
+                        |(_, source)| source.content().to_string(),
+                    );
                 let line_starts = source
                     .split('\n')
                     .scan(0, |pos, line| {
