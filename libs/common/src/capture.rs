@@ -1,10 +1,11 @@
 use std::io::Read;
 
-/// Captures everything written to `stdout` during its lifetime.
+/// Captures everything written to `stdout` and `stderr` during its lifetime.
 ///
 /// Example:
 /// ```
-/// let capture = StdoutCapture::new();
+/// use hemtt_common::capture::OutputCapture;
+/// let capture = OutputCapture::new();
 /// println!("hello world");
 /// let output = capture.finish();
 /// assert!(output.contains("hello world"));
