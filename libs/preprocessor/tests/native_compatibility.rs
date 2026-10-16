@@ -73,6 +73,38 @@ fn included_config_bom_is_rejected_without_rejecting_unicode_strings() {
 }
 
 #[test]
+fn failed_include_remains_a_dependency_for_editor_repair() {
+    let workspace = Workspace::builder()
+        .memory()
+        .finish(None, false, &PDriveOption::Disallow)
+        .unwrap();
+    let root = workspace.join("source.sqf").unwrap();
+    root.create_file()
+        .unwrap()
+        .write_all(b"#include \"header.hpp\"\nVALUE\n")
+        .unwrap();
+    let header = workspace.join("header.hpp").unwrap();
+    header
+        .create_file()
+        .unwrap()
+        .write_all(b"#define VALUE 1\n")
+        .unwrap();
+    let sources = hemtt_workspace::SourceDatabase::new();
+    let id = sources.file_id(&header);
+    sources.set_overlay(id, "\u{feff}#define VALUE 1\n", 1);
+    let (attempted, error) =
+        Processor::run_with_sources(&root, &PreprocessorOptions::default(), &sources)
+            .err()
+            .unwrap();
+    assert_eq!(error.get_code().unwrap().ident(), "BOM");
+    assert!(attempted.contains(&header));
+    sources.set_overlay(id, "#define VALUE 2\n", 2);
+    let repaired =
+        Processor::run_with_sources(&root, &PreprocessorOptions::default(), &sources).unwrap();
+    assert!(repaired.as_str().contains('2'));
+}
+
+#[test]
 fn open_trailing_comment_is_discarded() {
     assert_eq!(
         preprocess("private _x=42; /* unfinished\nignored", &[]).unwrap(),

@@ -25,6 +25,11 @@ across every loader/tool. Unicode inside strings remains supported, including
 U+FEFF that is not a file's leading BOM. This generic encoding policy contains
 no LiveYourLife execution-role rules.
 
+Release `v1.22.0-lyl.5` retains failed include dependencies before tokenization,
+so repairing a BOM or lexer error in a header refreshes every affected consumer.
+The editor protocol regressions cover rejection and repair on shared SQF/config
+headers, including a disk BOM hidden by VS Code's text model.
+
 A fallback entry recognizes the native `ctrlWebBrowserAction` outer signature
 when the upstream command database lacks it. Its general return type is unknown:
 native `Deflate` returned String although `supportInfo` reported NOTHING.

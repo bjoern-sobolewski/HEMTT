@@ -252,8 +252,10 @@ impl Processor {
         let included_id = self.sources.file_id(&path);
         self.sources.clear_dependencies_of(included_id);
         self.sources.record_dependency(current_id, included_id);
+        // Record the attempted include before lexing it. A parse/policy failure
+        // must retain the dependency so an editor repair rechecks its consumers.
+        self.add_include(path.clone(), path_tokens)?;
         let tokens = crate::parse::file_with_sources(&path, &self.sources)?;
-        self.add_include(path, path_tokens)?;
         let mut stream = tokens.iter().cloned().peekmore();
         let ret = self.file(&mut pragma.child(), &mut stream, buffer);
         self.file_stack.pop();
