@@ -304,9 +304,9 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
-    async fn config_structure(&self, params: ProviderParams) -> Result<Value> {
+    async fn config_structure(&self, params: config::export::StructureParams) -> Result<Value> {
         let _analysis = self.analysis.lock().await;
-        Ok(config::export::structure(params.url).await)
+        Ok(config::export::structure(params).await)
     }
     async fn performance(&self) -> Result<Value> {
         Ok(performance::snapshot())

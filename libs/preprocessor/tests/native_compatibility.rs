@@ -47,6 +47,29 @@ fn native_unicode_strings_preserve_bytes() {
 }
 
 #[test]
+fn quoted_comment_delimiters_do_not_consume_later_config_or_duplicate_urls() {
+    for quote in ['\'', '"'] {
+        let source = format!(
+            "urls[] = {{{quote}https://example.test/*{quote}, {quote}a/*b*/c{quote}, {quote}//{quote}}};\nclass CfgFunctions {{ class Tag {{ class Group {{ class registered; }}; }}; }};\n/* real comment */\n"
+        );
+        let result = preprocess(&source, &[]).unwrap();
+        assert!(result.contains("https://example.test/*"), "{result}");
+        assert!(result.contains("a/*b*/c"), "{result}");
+        assert!(result.contains("class registered;"), "{result}");
+        assert!(!result.contains("real comment"), "{result}");
+        assert_eq!(result.matches("https:").count(), 1);
+        assert!(!result.contains("https:////"), "{result}");
+    }
+    let result = preprocess(
+        "// /* a line comment\nclass Kept {};\n/* ' \" // block */ class AlsoKept {};\n",
+        &[],
+    )
+    .unwrap();
+    assert!(result.contains("class Kept {};"));
+    assert!(result.contains("class AlsoKept {};"));
+}
+
+#[test]
 fn utf8_bom_is_rejected_by_encoding_policy() {
     let error = preprocess("\u{feff}private _x=42;\n", &[]).unwrap_err();
     assert!(error.contains("BOM"), "{error}");
@@ -102,6 +125,77 @@ fn failed_include_remains_a_dependency_for_editor_repair() {
     let repaired =
         Processor::run_with_sources(&root, &PreprocessorOptions::default(), &sources).unwrap();
     assert!(repaired.as_str().contains('2'));
+}
+
+#[test]
+fn structural_projection_is_explicitly_provisional_and_validation_stays_strict() {
+    let workspace = Workspace::builder()
+        .memory()
+        .finish(None, false, &PDriveOption::Disallow)
+        .unwrap();
+    let root = workspace.join("description.ext").unwrap();
+    root.create_file().unwrap().write_all(b"#include \"header.hpp\"\nclass CfgFunctions { class TAG { class Group { file=PATH; class registered; }; }; };\n").unwrap();
+    let header = workspace.join("header.hpp").unwrap();
+    header.create_file().unwrap().write_all(b"#define PATH \"functions\"\n__EXEC(_v = call { str (1 + 2) }; _q = \"a ) (\"; _s = 'it''s )';)\n").unwrap();
+    let sources = hemtt_workspace::SourceDatabase::new();
+    let options = PreprocessorOptions::default();
+    assert_eq!(
+        Processor::run_with_sources(&root, &options, &sources)
+            .err()
+            .unwrap()
+            .1
+            .get_code()
+            .unwrap()
+            .ident(),
+        "PE25"
+    );
+    let (processed, skipped) =
+        Processor::run_structure_with_sources(&root, &options, &sources).unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].ident(), "PE25");
+    assert!(processed.as_str().contains("class registered;"));
+    assert!(processed.as_str().contains("file=\"functions\""));
+    assert!(!processed.as_str().contains("_v"));
+    let id = sources.file_id(&header);
+    sources.set_overlay(id, "#define PATH \"dirty\"\n__EXEC(_v=(1);)\n", 2);
+    let (dirty, skipped) =
+        Processor::run_structure_with_sources(&root, &options, &sources).unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert!(dirty.as_str().contains("file=\"dirty\""));
+    sources.set_overlay(id, "#define BAD(a,b) a\n#define PATH BAD(1)\n", 3);
+    let (unknown, skipped) =
+        Processor::run_structure_with_sources(&root, &options, &sources).unwrap();
+    assert_eq!(skipped[0].ident(), "PE9");
+    assert!(
+        unknown
+            .as_str()
+            .contains("file=__EVAL(HEMTT_UNRESOLVED_MACRO)")
+    );
+    assert_eq!(
+        Processor::run_with_sources(&root, &options, &sources)
+            .err()
+            .unwrap()
+            .1
+            .get_code()
+            .unwrap()
+            .ident(),
+        "PE9"
+    );
+    for (index, malformed) in [
+        "__EXEC missing",
+        "__EXEC((1)",
+        "__EXEC(\"unterminated)",
+        "#define BAD(a,b) a\nBAD(1",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sources.set_overlay(id, malformed, 10 + index as u64);
+        assert!(
+            Processor::run_structure_with_sources(&root, &options, &sources).is_err(),
+            "{malformed}"
+        );
+    }
 }
 
 #[test]

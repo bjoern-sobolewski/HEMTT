@@ -77,9 +77,28 @@ pub fn str(source: &str, path: &WorkspacePath) -> Result<Vec<Arc<Token>>, Error>
     let mut in_single_string = false;
     let mut in_double_string = false;
     let mut skipping_comment = false;
+    let mut in_block_comment = false;
 
     for pair in pairs {
         let start = LineCol(offset, (line, col));
+        if in_block_comment {
+            if pair.as_rule() == Rule::newline {
+                line += 1;
+                col = 0;
+            } else {
+                col += pair.as_str().len();
+            }
+            offset += pair.as_str().len();
+            if pair.as_rule() == Rule::COMMENT && pair.as_str() == "*/" {
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if skipping_comment && pair.as_rule() != Rule::newline {
+            col += pair.as_str().len();
+            offset += pair.as_str().len();
+            continue;
+        }
         match pair.as_rule() {
             Rule::string_character
                 if !in_single_string && !in_double_string && !skipping_comment =>
@@ -104,31 +123,28 @@ pub fn str(source: &str, path: &WorkspacePath) -> Result<Vec<Arc<Token>>, Error>
             }
             Rule::COMMENT => {
                 if in_single_string || in_double_string {
-                    if !skipping_comment {
-                        tokens.push(Arc::new(Token::new(
-                            Symbol::Word(pair.as_str().to_string()),
-                            Position::new(
-                                start,
-                                LineCol(start.0 + 2, (start.1.0 + 2, start.1.1 + 2)),
-                                path.clone(),
-                            ),
-                        )));
-                    }
+                    col += pair.as_str().len();
+                    offset += pair.as_str().len();
+                    tokens.push(Arc::new(Token::new(
+                        Symbol::Word(pair.as_str().to_string()),
+                        Position::new(start, LineCol(offset, (line, col)), path.clone()),
+                    )));
+                    // A quoted delimiter is data exactly once, never also a
+                    // Comment token. Subsequent quotes still update the state.
+                    continue;
                 } else {
-                    let comment_str = pair.as_str();
-                    let newline_count = comment_str.bytes().filter(|&b| b == b'\n').count();
-                    line += newline_count;
-                    if newline_count > 0 {
-                        if let Some(last_newline) = comment_str.rfind('\n') {
-                            col = comment_str.len() - last_newline;
-                        } else {
-                            col += comment_str.len();
-                        }
-                    } else {
-                        col += comment_str.len();
-                    }
-                    if comment_str == "//" {
+                    col += pair.as_str().len();
+                    if pair.as_str() == "/*" {
+                        in_block_comment = true;
+                    } else if pair.as_str() == "//" {
                         skipping_comment = true;
+                    } else {
+                        offset += pair.as_str().len();
+                        tokens.push(Arc::new(Token::new(
+                            Symbol::Unicode(pair.as_str().to_string()),
+                            Position::new(start, LineCol(offset, (line, col)), path.clone()),
+                        )));
+                        continue;
                     }
                 }
             }

@@ -30,6 +30,12 @@ so repairing a BOM or lexer error in a header refreshes every affected consumer.
 The editor protocol regressions cover rejection and repair on shared SQF/config
 headers, including a disk BOM hidden by VS Code's text model.
 
+Release `v1.22.0-lyl.6` makes comment tokenization quote-aware. Wildcard URLs
+such as `"https://example.test/*"` and quoted `//` or `/*...*/` remain string
+data exactly once; subsequent config declarations are no longer swallowed.
+Real line/block comments still follow their own delimiters, including an open
+trailing block comment. This fix is shared by the CLI and language server.
+
 A fallback entry recognizes the native `ctrlWebBrowserAction` outer signature
 when the upstream command database lacks it. Its general return type is unknown:
 native `Deflate` returned String although `supportInfo` reported NOTHING.
@@ -116,7 +122,23 @@ inheritance and deletions, plus include dependencies. It uses the existing
 preprocessor, parser and dirty source database; failed preprocessing/parsing
 returns explicit limitations. A recovered AST with blocking analysis findings is
 returned with explicit provisional findings, so unrelated config lint errors
-cannot silently erase all discoverable registrations. The editor interprets CfgFunctions and resolves
+cannot silently erase all discoverable registrations. The structural request
+also balances and skips `__EXEC(...)` bodies without expanding or executing them.
+Each skipped body makes the entire index provisional: side effects and dependent
+expression values remain unknown. Unbalanced bodies still fail. Ordinary
+preprocessing, diagnostics, verification and packaging retain their strict PE25
+failure; the structural projection must never be used as validation output.
+Macro calls with incorrect argument counts retain PE9 and become opaque,
+nonliteral expressions only in the structural projection. This does not accept a
+new macro signature, infer a value or execute code. An unclosed macro invocation
+fails instead of being silently consumed at EOF. Other preprocessing errors
+remain explicit failures of discovery.
+An optional `classes` list permits recovery of selected top-level declarations
+when unrelated config syntax prevents a full parse. Balanced statement boundaries
+select the declarations, then the existing config parser parses them. Root parse
+failures remain provisional findings; malformed boundaries or selected declarations
+fail recovery. This does not validate omitted properties or resolve external bases.
+The editor interprets CfgFunctions and resolves
 project file paths outside this generic endpoint. Existing macro signature help
 is unchanged; command parameter hints use the adapter's shared command contracts.
 
