@@ -304,6 +304,10 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
+    async fn config_structure(&self, params: ProviderParams) -> Result<Value> {
+        let _analysis = self.analysis.lock().await;
+        Ok(config::export::structure(params.url).await)
+    }
     async fn performance(&self) -> Result<Value> {
         Ok(performance::snapshot())
     }
@@ -390,6 +394,7 @@ async fn server() {
     .custom_method("hemtt/paa/p3d", Backend::paa_p3d)
     .custom_method("hemtt/paa/convert", Backend::paa_convert)
     .custom_method("hemtt/processed", Backend::processed)
+    .custom_method("hemtt/config/structure", Backend::config_structure)
     .custom_method("hemtt/performance", Backend::performance)
     .custom_method("hemtt/sqf/compiled", Backend::sqf_compiled)
     .custom_method("hemtt/rpt/locate", Backend::locate_rpt)

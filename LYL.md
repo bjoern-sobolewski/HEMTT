@@ -88,8 +88,8 @@ should rebase/merge upstream deliberately and rerun both upstream tests and the
 LiveYourLife worklist, preserving failures as failures.
 # Editor integration
 
-The LYL VS Code client is maintained in the LiveYourLife repository at
-`tools/vscode-lyl-sqf`, reusing this fork's `hls` server, protocol, grammars and
+The LYL VS Code client is maintained in the separate public
+`bjoern-sobolewski/vscode-lyl-sqf` repository, reusing this fork's `hls` server, protocol, grammars and
 language configurations. It adapts the repository's existing source mounts and
 reviewed command-context checks outside the general parser. Its VSIX bundles
 the Windows x64 language server with checksum/source pins and upstream notices.
@@ -109,6 +109,14 @@ ambient Git wiki cache. Malformed snapshots fail explicitly. This generic
 workspace input lets the LYL adapter inject the same corrected offline reference
 used by agent lookup and context checks. No LYL role or policy rule lives in the
 general parser.
+
+`hemtt/config/structure` takes an exact config-root URL and returns the ordered
+parsed class/property structure, literal string fields, external declarations,
+inheritance and deletions, plus include dependencies. It uses the existing
+preprocessor, parser and dirty source database; failed preprocessing/parsing
+returns explicit limitations. The editor interprets CfgFunctions and resolves
+project file paths outside this generic endpoint. Existing macro signature help
+is unchanged; command parameter hints use the adapter's shared command contracts.
 
 Build the language server with:
 
