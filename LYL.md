@@ -2,9 +2,11 @@
 
 Repository: https://github.com/bjoern-sobolewski/HEMTT
 
-The `lyl-compat` branch starts at upstream `v1.22.0`. Releases are named
-`v1.22.0-lyl.N`. Keep the upstream remote and carry focused compatibility patches
-instead of changing mission source to satisfy a different parser.
+The `lyl-compat` branch merges upstream `main` without rewriting published
+history. Release `v1.22.1-lyl.1` includes upstream
+`b888164616dbaf1007400485be4e4ee2b3521818` and the completed `v1.22.0-lyl.6`
+compatibility/editor baseline. Keep the upstream remote and carry focused generic
+compatibility patches; project rules belong in the consuming adapter.
 
 The first patch set adds native-compatible compact tokens, comma-separated code
 statements, Unicode separators/control characters inside strings, UTF-8 BOM SQF
@@ -90,7 +92,7 @@ never point a manifest at an untested or unpublished asset.
 
 Do not put mission code, game headers or private game data into this public fork.
 Keep upstream copyright/license files with distributed binaries. Future updates
-should rebase/merge upstream deliberately and rerun both upstream tests and the
+should merge upstream deliberately and rerun both upstream tests and the
 LiveYourLife worklist, preserving failures as failures.
 # Editor integration
 
@@ -175,3 +177,39 @@ time or process CPU. The LYL extension's `test/performance.js` drives a repeatab
 real-repository workload, captures a Node CPU profile and process CPU/memory,
 and checks dirty edits, shared headers, command hovers and context analysis.
 Use its inventory comparator to ensure speed changes retain all findings.
+
+## Upstream main integration (2026-10-17)
+
+The 21 upstream commits since v1.22.0 include guarded `isNil`/short-circuit S26
+fixes, SQF array/if optimizations, shared compiler/lint performance work, forward
+slash checks for includes and project paths, TOML lints and unknown lint-config
+validation, nested config-array stringtable discovery, C19 notes, dependency
+updates and editor path-copy support. These remain enabled. The merge retains
+UTF-16 completion positions, overlays, include-consumer invalidation, diagnostic
+scope ownership, prepared lint runners and both generic editor endpoints.
+
+Focused merge regressions cover compact guarded short circuits (including array
+expressions), dirty SQF/config TOML lints and repair without disk writes, invalid
+TOML regex/empty patterns/targets, UTF-8 match spans, prepared manager sharing,
+unknown lint configurations and UTF-16 completion with trailing whitespace.
+Config raw TOML checks now live in the shared checker used by CLI and HLS;
+SQF/config HLS checks read the source database rather than stale disk contents.
+No project execution contexts or mission-specific parser rules were added.
+
+Use the pinned Rust 1.99.1 toolchain: upstream uses APIs unavailable in the older
+1.96.1 installation. Diagnostic fixtures require NO_COLOR to be unset. Run the
+core libraries/HLS and supporting format libraries with `--lib --tests --release
+--locked --target x86_64-pc-windows-msvc -- --nocapture --test-threads=1`.
+Run CLI tests in the ordinary debug test profile: the release executable exits
+on intentionally invalid fixtures, while debug tests return their error value.
+The nocapture option is needed by upstream's own stdout-capture test. These are
+local commands; GitHub Actions remains disabled. See the consuming extension's
+VALIDATION.md/PERFORMANCE.md and the Arma maintenance report for measured static
+findings, real-LSP/editor checks, performance and explicitly separate engine
+coverage. Existing ignored upstream tests are retained, not counted as passes.
+
+Publish immutable releases from clean exact commits with Windows binaries,
+SHA256SUMS, LICENSE and a matching vendored corresponding-source bundle. Verify
+public asset digests and provision new consumer caches before updating pins.
+Never replace a published tag or asset. Keep full local Arma diagnostic/source
+inventories private; public reports contain aggregate findings only.
