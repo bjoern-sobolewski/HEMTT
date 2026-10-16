@@ -58,6 +58,13 @@ pub fn file_with_sources(
 /// # Panics
 /// If the string is invalid
 pub fn str(source: &str, path: &WorkspacePath) -> Result<Vec<Arc<Token>>, Error> {
+    // Keep this explicit encoding policy separate from claims about native syntax.
+    // The same check reads disk sources and unsaved overlays, including headers.
+    if source.starts_with('\u{feff}') {
+        return Err(Error::Code(Arc::new(crate::codes::bom::Bom {
+            file: path.clone(),
+        })));
+    }
     // Native file preprocessing discards an open trailing block comment. This
     // must be quote-aware: a string containing "/*" is not a comment.
     let source = trim_open_comment(source);
@@ -87,11 +94,6 @@ pub fn str(source: &str, path: &WorkspacePath) -> Result<Vec<Arc<Token>>, Error>
                     ),
                     path.clone(),
                 ));
-            }
-            Rule::bom => {
-                offset += pair.as_str().len();
-                col += pair.as_str().len();
-                continue;
             }
             Rule::newline => {
                 if skipping_comment {
@@ -242,7 +244,6 @@ impl Parse for Symbol {
             }
             Rule::COMMENT => Self::Comment(pair.as_str().to_string()),
             Rule::EOI | Rule::file => Self::Eoi,
-            Rule::bom => unreachable!("leading BOM is consumed before token creation"),
         }
     }
 }

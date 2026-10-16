@@ -16,6 +16,15 @@ pragma retains its explicit false-branch behavior. Files using this conditional
 remain marked as unsuitable for rapification, so packaging cannot accidentally
 freeze a deployment-dependent include decision.
 
+Release `v1.22.0-lyl.4` supersedes the initial BOM acceptance: CLI preflight and
+shared preprocessing reject leading UTF-8 BOMs with the `BOM` encoding-policy
+diagnostic. This covers SQF, configs, included headers and unsaved HLS overlays.
+Save source as UTF-8 without BOM. Native probes still establish that some SQF
+loading paths accept BOMs; the conservative policy avoids depending on acceptance
+across every loader/tool. Unicode inside strings remains supported, including
+U+FEFF that is not a file's leading BOM. This generic encoding policy contains
+no LiveYourLife execution-role rules.
+
 A fallback entry recognizes the native `ctrlWebBrowserAction` outer signature
 when the upstream command database lacks it. Its general return type is unknown:
 native `Deflate` returned String although `supportInfo` reported NOTHING.

@@ -40,9 +40,7 @@ fn comma_statements_do_not_change_array_separators() {
 
 #[test]
 fn native_encoded_function_sources_parse() {
-    assert!(parses(
-        "\u{feff}private _text='a\u{00a0}b\u{202f}€\u{0084}';"
-    ));
+    assert!(parses("private _text='a\u{00a0}b\u{202f}€\u{0084}';"));
     assert!(parses("private _x=42; /* unfinished"));
 }
 

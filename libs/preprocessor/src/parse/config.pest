@@ -1,4 +1,4 @@
-file = _{ SOI ~ bom? ~ (
+file = _{ SOI ~ (
     word | alpha | digit | underscore |
     left_parentheses | right_parentheses | join |
     directive | escape | comma | double_quote |
@@ -23,7 +23,6 @@ left_angle = { "<" }
 right_angle = { ">" }
 unicode = { LETTER | MARK | NUMBER | SYMBOL | PUNCTUATION | MATH | OTHER_MATH }
 string_character = { ANY }
-bom = { "\u{feff}" }
 
 space = { " " }
 tab = { "\t" }

@@ -47,10 +47,28 @@ fn native_unicode_strings_preserve_bytes() {
 }
 
 #[test]
-fn utf8_bom_is_removed_without_rewriting_body() {
+fn utf8_bom_is_rejected_by_encoding_policy() {
+    let error = preprocess("\u{feff}private _x=42;\n", &[]).unwrap_err();
+    assert!(error.contains("BOM"), "{error}");
+    assert!(error.contains("encoding policy"), "{error}");
     assert_eq!(
-        preprocess("\u{feff}private _x=42;\n", &[]).unwrap(),
+        preprocess("private _x=42;\n", &[]).unwrap(),
         "private _x=42;\n"
+    );
+}
+
+#[test]
+fn included_config_bom_is_rejected_without_rejecting_unicode_strings() {
+    let error = preprocess(
+        "#include \"header.hpp\"\n",
+        &[("header.hpp", "\u{feff}#define VALUE 1\n")],
+    )
+    .unwrap_err();
+    assert!(error.contains("BOM"), "{error}");
+    assert!(error.contains("header.hpp"), "{error}");
+    assert_eq!(
+        preprocess("private _s='a\u{feff}b';\n", &[]).unwrap(),
+        "private _s='a\u{feff}b';\n"
     );
 }
 

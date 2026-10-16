@@ -44,15 +44,6 @@ impl Module for BOMCheck {
                     continue;
                 }
                 if buffer == [0xEF, 0xBB, 0xBF] {
-                    // The native SQF loader accepts a UTF-8 BOM. The preprocessor
-                    // removes it while retaining original source byte offsets.
-                    if path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("sqf"))
-                    {
-                        continue;
-                    }
                     report.push(Arc::new(BOMError {
                         file: {
                             path.display()
@@ -79,7 +70,7 @@ impl Code for BOMError {
     }
 
     fn message(&self) -> String {
-        format!("File `{}` has a BOM marker", self.file)
+        format!("File `{}` has a BOM marker (encoding policy)", self.file)
     }
 
     fn help(&self) -> Option<String> {
