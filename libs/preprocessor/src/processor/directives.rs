@@ -6,7 +6,6 @@ use hemtt_workspace::{
     reporting::{Definition, FunctionDefinition, Output, Symbol, Token},
 };
 use peekmore::{PeekMore, PeekMoreIterator};
-use tracing::debug;
 
 use crate::{
     Error,
@@ -390,30 +389,13 @@ impl Processor {
             Ok((Arc::new(vec![token]), false))
         }
         self.skip_whitespace(stream, None);
-        let left = read_value(stream);
-        if !left.is_empty()
-            && &Symbol::Word(String::from("__has_include"))
-                == left
-                    .first()
-                    .expect("left is not empty, must exist")
-                    .symbol()
+        if stream
+            .peek()
+            .is_some_and(|token| token.to_string() == "__has_include")
         {
-            if pragma.is_flagged(&Flag::Pe23IgnoreIfHasInclude) {
-                debug!(
-                    "ignoring __has_include due to pragma flag, this config will not be rapified"
-                );
-                self.no_rapify = true;
-                self.ifstates.push_if(command, false);
-                self.skip_to_after_newline(stream, None);
-                return Ok(());
-            }
-            return Err(IfHasInclude::code(
-                left.first()
-                    .expect("left is not empty, must exist")
-                    .as_ref()
-                    .clone(),
-            ));
+            return self.directive_has_include(pragma, command, stream);
         }
+        let left = read_value(stream);
         let (left, left_defined) = if left.len() == 1 {
             resolve_value(
                 &mut self.defines,
@@ -534,6 +516,73 @@ impl Processor {
         self.ifstates
             .push_if(command, self.defines.contains_key(&ident_string) == outcome);
         Self::expect_nothing_to_newline(stream)
+    }
+
+    fn directive_has_include(
+        &mut self,
+        pragma: &Pragma,
+        command: Arc<Token>,
+        stream: &mut PeekMoreIterator<impl Iterator<Item = Arc<Token>>>,
+    ) -> Result<(), Error> {
+        let builtin = stream.next().expect("peeked __has_include");
+        // Preserve the explicitly requested upstream pragma behavior.
+        self.no_rapify = true;
+        if pragma.is_flagged(&Flag::Pe23IgnoreIfHasInclude) {
+            self.ifstates.push_if(command, false);
+            self.skip_to_after_newline(stream, None);
+            return Ok(());
+        }
+        self.skip_whitespace(stream, None);
+        if stream
+            .next()
+            .is_none_or(|token| token.symbol() != &Symbol::LeftParenthesis)
+        {
+            return Err(IfHasInclude::code(builtin.as_ref().clone()));
+        }
+        self.skip_whitespace(stream, None);
+        let Some(open) = stream.next() else {
+            return Err(UnexpectedEOF::code(builtin.as_ref().clone()));
+        };
+        if !open.symbol().is_include_enclosure() {
+            return Err(IfHasInclude::code(builtin.as_ref().clone()));
+        }
+        let close = open
+            .symbol()
+            .matching_enclosure()
+            .expect("include enclosure");
+        let mut path = String::new();
+        let mut closed = false;
+        for token in stream.by_ref() {
+            if token.symbol() == &close {
+                closed = true;
+                break;
+            }
+            if token.symbol().is_newline() || token.symbol().is_eoi() {
+                return Err(IfHasInclude::code(builtin.as_ref().clone()));
+            }
+            path.push_str(&token.to_string());
+        }
+        self.skip_whitespace(stream, None);
+        if !closed
+            || path.is_empty()
+            || stream
+                .next()
+                .is_none_or(|token| token.symbol() != &Symbol::RightParenthesis)
+        {
+            return Err(IfHasInclude::code(builtin.as_ref().clone()));
+        }
+        Self::expect_nothing_to_newline(stream)?;
+        let current = self.file_stack.last().expect("root file should exist");
+        let found = current.locate_with_pdrive(&path)?;
+        let present = found.is_some();
+        if let Some(found) = found {
+            self.sources.record_dependency(
+                self.sources.file_id(current),
+                self.sources.file_id(&found.path),
+            );
+        }
+        self.ifstates.push_if(command, present);
+        Ok(())
     }
 }
 

@@ -265,7 +265,7 @@ fn is_in(list: &[&str], item: &str) -> bool {
 }
 
 fn load_wiki(force_pull: bool) -> Wiki {
-    Wiki::load_git(force_pull).unwrap_or_else(|e| {
+    let mut wiki = Wiki::load_git(force_pull).unwrap_or_else(|e| {
         trace!(?e, "failed to load arma 3 wiki from git: {}", e);
         if force_pull {
             error!("Failed to update Arma 3 wiki from remote");
@@ -273,7 +273,60 @@ fn load_wiki(force_pull: bool) -> Wiki {
             warn!("Failed to load Arma 3 wiki from git, falling back to bundled version");
         }
         Wiki::load_dist()
-    })
+    });
+    // Native Arma 3 2.22 exposes this command before it appears in the wiki
+    // snapshot. Do not replace a future upstream definition with this fallback.
+    if !wiki
+        .commands()
+        .raw()
+        .values()
+        .any(|command| command.name().eq_ignore_ascii_case("ctrlWebBrowserAction"))
+    {
+        wiki.add_custom_command_parse(include_str!("ctrlWebBrowserAction.yaml"))
+            .expect("bundled native command metadata must be valid");
+    }
+    // The setDammage wiki redirect is scraped as a nular command. It is the
+    // documented binary alias of setDamage; retain the canonical full contract.
+    if let Some(canonical) = wiki
+        .commands()
+        .raw()
+        .values()
+        .find(|command| command.name().eq_ignore_ascii_case("setDamage"))
+    {
+        let mut alias = canonical.clone();
+        alias.set_name("setDammage".into());
+        wiki.add_custom_command(alias);
+    }
+    // The wiki describes autoselect as true/false but its scraped parameter
+    // type is String. Correct only that known bad field; preserve all others.
+    let correction = wiki
+        .commands()
+        .raw()
+        .values()
+        .find(|command| command.name().eq_ignore_ascii_case("addWeapon"))
+        .map(|command| serde_json::to_value(command).expect("command serializes"));
+    if let Some(mut command) = correction {
+        let mut changed = false;
+        if let Some(syntaxes) = command["syntax"].as_array_mut() {
+            for syntax in syntaxes {
+                if let Some(params) = syntax["params"].as_array_mut() {
+                    for param in params {
+                        if param["name"] == "autoselect" && param["type"] == "String" {
+                            param["type"] = "Boolean".into();
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            wiki.add_custom_command(
+                serde_json::from_value(command)
+                    .expect("corrected Boolean metadata must remain valid"),
+            );
+        }
+    }
+    wiki
 }
 
 #[cfg(test)]

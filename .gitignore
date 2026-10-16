@@ -1,4 +1,5 @@
 target/
+lyl-*.log
 generated.hpp
 map.hpp
 *.map

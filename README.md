@@ -1,5 +1,8 @@
 # HEMTT
 
+LiveYourLife compatibility fork: see [LYL.md](LYL.md) for patches, validation,
+Windows releases and maintenance. Upstream documentation follows below.
+
 <div align="center">
   <img src="book/logo.png" alt="HEMTT Logo" width="200" />
 </div>

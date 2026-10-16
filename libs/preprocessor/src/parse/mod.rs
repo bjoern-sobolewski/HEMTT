@@ -58,6 +58,9 @@ pub fn file_with_sources(
 /// # Panics
 /// If the string is invalid
 pub fn str(source: &str, path: &WorkspacePath) -> Result<Vec<Arc<Token>>, Error> {
+    // Native file preprocessing discards an open trailing block comment. This
+    // must be quote-aware: a string containing "/*" is not a comment.
+    let source = trim_open_comment(source);
     let pairs = PreprocessorParser::parse(Rule::file, source)
         .map_err(|e| ParsingFailed::code(e, path.clone()))?;
     let mut tokens = Vec::with_capacity(source.len() / 4); // rough estimate: 1 token per 4 chars
@@ -71,6 +74,25 @@ pub fn str(source: &str, path: &WorkspacePath) -> Result<Vec<Arc<Token>>, Error>
     for pair in pairs {
         let start = LineCol(offset, (line, col));
         match pair.as_rule() {
+            Rule::string_character
+                if !in_single_string && !in_double_string && !skipping_comment =>
+            {
+                return Err(ParsingFailed::code(
+                    pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError {
+                            message: "separator/control character outside a quoted string"
+                                .to_string(),
+                        },
+                        pair.as_span(),
+                    ),
+                    path.clone(),
+                ));
+            }
+            Rule::bom => {
+                offset += pair.as_str().len();
+                col += pair.as_str().len();
+                continue;
+            }
             Rule::newline => {
                 if skipping_comment {
                     skipping_comment = false;
@@ -137,6 +159,44 @@ pub fn str(source: &str, path: &WorkspacePath) -> Result<Vec<Arc<Token>>, Error>
     Ok(tokens)
 }
 
+fn trim_open_comment(source: &str) -> &str {
+    let mut chars = source.char_indices().peekable();
+    let mut quote = None;
+    while let Some((offset, ch)) = chars.next() {
+        if let Some(delimiter) = quote {
+            if ch == delimiter {
+                if chars.peek().is_some_and(|(_, next)| *next == delimiter) {
+                    chars.next();
+                } else {
+                    quote = None;
+                }
+            }
+        } else if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+        } else if ch == '/' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+            for (_, next) in chars.by_ref() {
+                if next == '\n' {
+                    break;
+                }
+            }
+        } else if ch == '/' && chars.peek().is_some_and(|(_, next)| *next == '*') {
+            chars.next();
+            let mut closed = false;
+            while let Some((_, next)) = chars.next() {
+                if next == '*' && chars.peek().is_some_and(|(_, end)| *end == '/') {
+                    chars.next();
+                    closed = true;
+                    break;
+                }
+            }
+            if !closed {
+                return &source[..offset];
+            }
+        }
+    }
+    source
+}
+
 trait Parse {
     fn to_symbol(pair: pest::iterators::Pair<Rule>) -> Self;
 }
@@ -172,7 +232,7 @@ impl Parse for Symbol {
             Rule::right_angle => Self::RightAngle,
             Rule::equals => Self::Equals,
 
-            Rule::unicode => Self::Unicode(pair.as_str().to_string()),
+            Rule::unicode | Rule::string_character => Self::Unicode(pair.as_str().to_string()),
 
             Rule::newline => Self::Newline,
             Rule::space => Self::Whitespace(Whitespace::Space),
@@ -182,6 +242,7 @@ impl Parse for Symbol {
             }
             Rule::COMMENT => Self::Comment(pair.as_str().to_string()),
             Rule::EOI | Rule::file => Self::Eoi,
+            Rule::bom => unreachable!("leading BOM is consumed before token creation"),
         }
     }
 }

@@ -228,7 +228,10 @@ fn statements<'a>(
             });
         assignment
             .or(expression.map_with_span(Statement::Expression))
-            .separated_by(just(Token::Control(Control::Terminator)))
+            .separated_by(choice((
+                just(Token::Control(Control::Terminator)),
+                just(Token::Control(Control::Separator)),
+            )))
             .allow_trailing()
             .map_with_span(|content, span| Statements {
                 source: processed.extract(&span),

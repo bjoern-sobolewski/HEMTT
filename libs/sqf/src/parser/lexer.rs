@@ -155,15 +155,12 @@ fn base() -> impl Parser<char, Token, Error = Simple<char>> {
     let string_single = string('\'').map(|s| Token::String(s.into(), StringWrapper::SingleQuote));
     let string_double = string('\"').map(|s| Token::String(s.into(), StringWrapper::DoubleQuote));
 
-    // a constant (ident, number or string) must not be immediately followed
-    // by another constant (without whitespace), or something is wrong
-    let constant = choice((number, identifier, string_single, string_double)).boxed();
-    let not_constant = constant.clone().not().ignored().or(end()).rewind();
-
     choice((
         operator().map(Token::Operator),
         control().map(Token::Control),
-        constant.then_ignore(not_constant),
+        // Quotes delimit tokens without whitespace in native SQF (isNil"_x",
+        // for"_i"from). The parser still rejects missing operators/arguments.
+        choice((number, identifier, string_single, string_double)),
     ))
 }
 
