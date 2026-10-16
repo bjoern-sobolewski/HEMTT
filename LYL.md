@@ -88,6 +88,14 @@ workspace guesses, and merge config/SQF diagnostics without one clearing the
 other. It adds native command completion alongside inherited macro/path
 completion. The server's TCP startup protocol is unchanged.
 
+An optional `.hemtt/command-reference.json` supplies a complete schema-1 command
+snapshot in arma3-wiki's serde JSON format. When present, both CLI and HLS use
+only that metadata plus explicit custom commands, without reading/updating an
+ambient Git wiki cache. Malformed snapshots fail explicitly. This generic
+workspace input lets the LYL adapter inject the same corrected offline reference
+used by agent lookup and context checks. No LYL role or policy rule lives in the
+general parser.
+
 Build the language server with:
 
 ```powershell

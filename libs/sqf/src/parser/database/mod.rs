@@ -68,11 +68,13 @@ impl Database {
 
     #[must_use]
     pub fn a3(force_pull: bool) -> Self {
+        Self::from_wiki(load_wiki(force_pull))
+    }
+
+    fn from_wiki(wiki: Wiki) -> Self {
         let mut nular_commands = HashSet::new();
         let mut unary_commands = HashSet::new();
         let mut binary_commands = HashSet::new();
-
-        let wiki = load_wiki(force_pull);
 
         for command in wiki.commands().raw().values() {
             for syntax in command.syntax() {
@@ -111,7 +113,44 @@ impl Database {
     /// [`Error::CustomCommandError`] if a custom command could not be parsed.
     /// [`Error::CustomCommandIo`] if a custom command could not be read.
     pub fn a3_with_workspace(workspace: &WorkspacePath, force_pull: bool) -> Result<Self, Error> {
-        let mut database = Self::a3(force_pull);
+        // A workspace can supply a complete immutable command snapshot. This
+        // generic input keeps CLI and editor metadata identical, without a
+        // network/cache-dependent wiki refresh or project policy in the parser.
+        let snapshot = workspace
+            .join("/.hemtt/command-reference.json")
+            .map_err(|e| Error::CustomCommandIo(e.to_string()))?;
+        let mut database = if snapshot.exists().unwrap_or(false) {
+            let content = snapshot
+                .read_to_string()
+                .map_err(|e| Error::CustomCommandIo(e.to_string()))?;
+            let document: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| Error::CustomCommandError(format!("command-reference.json: {e}")))?;
+            if document["schema"] != 1 {
+                return Err(Error::CustomCommandError(
+                    "Unsupported command snapshot schema".into(),
+                ));
+            }
+            let commands = document["commands"].as_object().ok_or_else(|| {
+                Error::CustomCommandError("Missing command snapshot entries".into())
+            })?;
+            if commands.is_empty() {
+                return Err(Error::CustomCommandError("Empty command snapshot".into()));
+            }
+            let mut wiki = Wiki::load_dist();
+            let names = wiki.commands().raw().keys().cloned().collect::<Vec<_>>();
+            for name in names {
+                wiki.remove_command(&name);
+            }
+            for (name, value) in commands {
+                let command = serde_json::from_value(value.clone()).map_err(|e| {
+                    Error::CustomCommandError(format!("command snapshot {name}: {e}"))
+                })?;
+                wiki.add_custom_command(command);
+            }
+            Self::from_wiki(wiki)
+        } else {
+            Self::a3(force_pull)
+        };
         let custom_root = workspace.join("/.hemtt/commands");
         if let Ok(custom_root) = custom_root
             && custom_root.exists().unwrap_or(false)
@@ -337,6 +376,40 @@ mod tests {
 
     use super::Database;
     use crate::Error;
+
+    #[test]
+    fn pinned_workspace_snapshot_replaces_remote_commands_and_rejects_bad_input() {
+        let workspace = Workspace::builder()
+            .memory()
+            .finish(None, false, &hemtt_common::config::PDriveOption::Disallow)
+            .expect("workspace");
+        workspace
+            .join("/.hemtt")
+            .expect("join")
+            .create_dir()
+            .expect("mkdir");
+        let path = workspace
+            .join("/.hemtt/command-reference.json")
+            .expect("join");
+        let mut file = path.create_file().expect("create");
+        file.write_all(br#"{"schema":1,"commands":{"onlyPinned":{"name":"onlyPinned","description":"fixture","syntax":[{"call":"Nular","ret":["Number",null],"params":[]}],"argument_loc":"Unspecified","effect_loc":"Unspecified"}}}"#).expect("write");
+        drop(file);
+        let database = Database::a3_with_workspace(&workspace, true)
+            .expect("snapshot loads even with force pull requested");
+        assert!(database.has_nular_command("onlyPinned"));
+        assert!(
+            !database.has_command("player"),
+            "no ambient wiki commands leak into the snapshot"
+        );
+        let mut file = path.create_file().expect("create");
+        file.write_all(br#"{"schema":2,"commands":{}}"#)
+            .expect("write");
+        drop(file);
+        assert!(matches!(
+            Database::a3_with_workspace(&workspace, false),
+            Err(Error::CustomCommandError(_))
+        ));
+    }
 
     /// A custom command that cannot be read used to panic, which is fatal in
     /// the language server since this runs on a request path.
