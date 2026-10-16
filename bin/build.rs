@@ -1,6 +1,6 @@
 pub fn main() {
     let mut base = env!("CARGO_PKG_VERSION").to_string();
-    base.push_str("-lyl.5");
+    base.push_str("-lyl.6");
     if option_env!("CI").is_none() {
         base.push_str("-local");
     } else if option_env!("RELEASE").is_none() {
