@@ -213,3 +213,21 @@ SHA256SUMS, LICENSE and a matching vendored corresponding-source bundle. Verify
 public asset digests and provision new consumer caches before updating pins.
 Never replace a published tag or asset. Keep full local Arma diagnostic/source
 inventories private; public reports contain aggregate findings only.
+
+Local Rust validation: 589 unit/integration tests passed across common, workspace,
+preprocessor, config, SQF, HLS, CLI, LZO, PAA, PBO, P3D, stringtable, signing and
+WSS. Two inherited tests remain ignored (moving wiki examples and a manual SQFC
+A/B helper). The core documentation suites also pass their one runnable example;
+its stale upstream `StdoutCapture` name was corrected to imported `OutputCapture`.
+`cargo fmt --all -- --check` passes. No test or lint was disabled for this update.
+
+The unchanged full Arma snapshot maps 4,018 sources, including ordered mission,
+addon and shared mounts plus actual installed game headers. Staging reported no
+limitations. Both the released lyl.6 CLI and this update fail before SQF compilation
+with the same 2,189 annotation records. Raw comparison differs only in the order
+of the CCHU expected-token alternatives; the set, source range, severity and
+finding are unchanged. Do not interpret that failed config gate as full SQF
+validation. Separate real-HLS and historical SQF performance workloads cover
+additional SQF analysis; their precise scopes/results belong in the consuming
+maintenance report. Original/staged sources and game archive hashes are retained
+locally. This update adds no native-engine or multiplayer execution evidence.
