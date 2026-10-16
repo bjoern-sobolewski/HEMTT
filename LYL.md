@@ -114,7 +114,9 @@ general parser.
 parsed class/property structure, literal string fields, external declarations,
 inheritance and deletions, plus include dependencies. It uses the existing
 preprocessor, parser and dirty source database; failed preprocessing/parsing
-returns explicit limitations. The editor interprets CfgFunctions and resolves
+returns explicit limitations. A recovered AST with blocking analysis findings is
+returned with explicit provisional findings, so unrelated config lint errors
+cannot silently erase all discoverable registrations. The editor interprets CfgFunctions and resolves
 project file paths outside this generic endpoint. Existing macro signature help
 is unchanged; command parameter hints use the adapter's shared command contracts.
 

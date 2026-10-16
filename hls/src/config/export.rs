@@ -45,8 +45,9 @@ pub async fn structure(url: Url) -> Json {
         return json!({"properties": [], "limitations": ["Config preprocessing failed; registrations unresolved. Inspect diagnostics."]});
     };
     match hemtt_config::parse(project.as_ref(), &processed) {
-        Ok(report) if report.errors().is_empty() => json!({
+        Ok(report) => json!({
             "properties": properties(&report.config().0), "limitations": [],
+            "provisional": report.errors().iter().map(|code| format!("{}: {}", code.ident(), code.message())).collect::<Vec<_>>(),
             "includes": processed.included_files().iter().map(|p| workspace.to_url(p)).collect::<Vec<_>>(),
         }),
         _ => {
