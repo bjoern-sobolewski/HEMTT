@@ -1,2 +1,4 @@
 name = "Check source regressions"
 prefix = "check"
+[lints.sqf]
+short_circuit_bool_var = true

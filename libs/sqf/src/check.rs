@@ -157,9 +157,16 @@ mod tests {
     }
 
     fn checked(contents: &str) -> super::Checked {
+        checked_project(contents, None)
+    }
+
+    fn checked_project(
+        contents: &str,
+        project: Option<&hemtt_common::config::ProjectConfig>,
+    ) -> super::Checked {
         check(
             &processed(contents),
-            None,
+            project,
             &Arc::new(Addon::test_addon()),
             &{
                 let file = Workspace::builder()
@@ -271,6 +278,12 @@ mod tests {
 
     #[test]
     fn compact_isnil_guards_retain_short_circuit_protection() {
+        let project = hemtt_common::config::ProjectConfig::from_file(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/check_project/.hemtt/project.toml"),
+        )
+        .expect("project");
+        let checked = |source: &str| checked_project(source, Some(&project));
         for source in [
             "if(isNil\"_guard\"||{_guard})exitWith{};",
             "if(isNil\"_guard\"||{_guard==1})exitWith{};",

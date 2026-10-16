@@ -43,9 +43,10 @@ impl Processor {
         {
             return Ok(None);
         }
-        stream.next().expect("peeked above");
+        let opening = stream.next().expect("peeked above");
         let mut quotes = false;
         let mut depth = 0;
+        let mut closed = false;
         let mut args = Vec::new();
         let mut arg = Vec::new();
         while let Some(token) = stream.peek() {
@@ -75,6 +76,7 @@ impl Processor {
             } else if symbol.is_right_paren() {
                 if depth == 0 {
                     stream.next();
+                    closed = true;
                     break;
                 }
                 depth -= 1;
@@ -87,6 +89,11 @@ impl Processor {
                 quotes = true;
             }
             arg.push(stream.next().expect("peeked above"));
+        }
+        if !closed {
+            return Err(crate::codes::pe2_unexpected_eof::UnexpectedEOF::code(
+                (*opening).clone(),
+            ));
         }
         if !arg.is_empty() {
             args.push(arg);
@@ -220,12 +227,30 @@ impl Processor {
                     ));
                 };
                 if args.len() != function.args().len() {
-                    return Err(FunctionCallArgumentCount::code(
+                    let error = FunctionCallArgumentCount::code(
                         ident.as_ref().clone(),
                         function.args().len(),
                         args.len(),
                         &self.defines.clone(),
-                    ));
+                    );
+                    if self.structure_only {
+                        // An opaque expression, never a fabricated literal or
+                        // a new accepted macro signature. Its original PE9 is
+                        // retained and the entire projection is provisional.
+                        if let Error::Code(code) = error {
+                            self.structural_limitations.push(code);
+                        }
+                        self.no_rapify = true;
+                        buffer.push(Output::Macro(
+                            ident.clone(),
+                            vec![Output::Direct(Arc::new(Token::new(
+                                Symbol::Word("__EVAL(HEMTT_UNRESOLVED_MACRO)".to_string()),
+                                ident.position().clone(),
+                            )))],
+                        ));
+                        return Ok(());
+                    }
+                    return Err(error);
                 }
                 let mut arg_defines = HashMap::with_capacity(function.args().len());
                 for (arg, value) in function.args().iter().zip(args) {

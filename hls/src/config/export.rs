@@ -7,6 +7,13 @@ use url::Url;
 
 use crate::{sources::SourceSync, workspace::EditorWorkspaces};
 
+#[derive(serde::Deserialize)]
+pub struct StructureParams {
+    pub url: Url,
+    #[serde(default)]
+    pub classes: Vec<String>,
+}
+
 fn properties(items: &[Property]) -> Vec<Json> {
     items
         .iter()
@@ -27,7 +34,8 @@ fn properties(items: &[Property]) -> Vec<Json> {
         .collect()
 }
 
-pub async fn structure(url: Url) -> Json {
+pub async fn structure(params: StructureParams) -> Json {
+    let url = params.url;
     let Some(workspace) = EditorWorkspaces::get().guess_workspace_retry(&url).await else {
         return json!({"properties": [], "limitations": ["Config workspace unavailable"]});
     };
@@ -39,19 +47,46 @@ pub async fn structure(url: Url) -> Json {
     let options = project.as_ref().map_or(&defaults, |p| p.preprocessor());
     // The requested root is intentional (e.g. description.ext), not its
     // synthetic addon's config.cpp. Includes still resolve through the VFS.
-    let Ok(processed) =
-        Processor::run_with_sources(&source, options, &SourceSync::get().database())
-    else {
-        return json!({"properties": [], "limitations": ["Config preprocessing failed; registrations unresolved. Inspect diagnostics."]});
+    let (processed, skipped) = match Processor::run_structure_with_sources(
+        &source,
+        options,
+        &SourceSync::get().database(),
+    ) {
+        Ok(result) => result,
+        Err((_, error)) => {
+            let message = error.get_code().map_or_else(
+                || error.to_string(),
+                |code| {
+                    format!(
+                        "{}: {} at {:?}",
+                        code.ident(),
+                        code.message(),
+                        code.token().map(|t| t.position())
+                    )
+                },
+            );
+            return json!({"properties": [], "limitations": [format!("Config preprocessing failed; registrations unresolved: {message}")]});
+        }
     };
     match hemtt_config::parse(project.as_ref(), &processed) {
         Ok(report) => json!({
             "properties": properties(&report.config().0), "limitations": [],
-            "provisional": report.errors().iter().map(|code| format!("{}: {}", code.ident(), code.message())).collect::<Vec<_>>(),
+            "provisional": skipped.iter().map(|code| format!("{}: {} at {:?}; construct not executed or resolved; side effects and expression values unknown", code.ident(), code.message(), code.token().map(|t| t.position()))).chain(report.errors().iter().map(|code| format!("{}: {}", code.ident(), code.message()))).collect::<Vec<_>>(),
             "includes": processed.included_files().iter().map(|p| workspace.to_url(p)).collect::<Vec<_>>(),
         }),
-        _ => {
-            json!({"properties": [], "limitations": ["Config parsing failed; registrations unresolved. Inspect diagnostics."]})
+        Err(codes) => {
+            if !params.classes.is_empty() {
+                return match hemtt_config::projection::selected(processed.as_str(), &params.classes)
+                {
+                    Ok(config) => json!({
+                        "properties": properties(&config.0), "limitations": [],
+                        "provisional": skipped.iter().map(|code| format!("{}: {}; construct not executed or resolved; expression values unknown", code.ident(), code.message())).chain(codes.iter().map(|code| format!("Full config parsing failed: {}: {}; only requested top-level classes projected; root validation and external inheritance unresolved", code.ident(), code.message()))).collect::<Vec<_>>(),
+                        "includes": processed.included_files().iter().map(|p| workspace.to_url(p)).collect::<Vec<_>>(),
+                    }),
+                    Err(error) => json!({"properties": [], "limitations": [error]}),
+                };
+            }
+            json!({"properties": [], "limitations": codes.iter().map(|code| format!("Config parsing failed; registrations unresolved: {}: {}", code.ident(), code.message())).collect::<Vec<_>>()})
         }
     }
 }

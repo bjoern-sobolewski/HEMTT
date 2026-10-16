@@ -28,4 +28,6 @@ space = { " " }
 tab = { "\t" }
 
 WHITESPACE = ${ space | tab }
-COMMENT = { ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | "//" }
+// Delimiters are interpreted by the quote-aware tokenizer. Matching a whole
+// block here could consume closing string quotes in a URL such as "https://x/*".
+COMMENT = { "/*" | "*/" | "//" }

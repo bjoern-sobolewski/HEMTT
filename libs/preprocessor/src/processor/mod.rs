@@ -33,6 +33,9 @@ mod whitespace;
 #[derive(Default)]
 /// Arma 3 Preprocessor
 pub struct Processor {
+    /// Editor-only projection; never used for validation or rapification.
+    structure_only: bool,
+    structural_limitations: Codes,
     ifstates: IfStates,
     defines: Defines,
     backslashes: usize,
@@ -128,8 +131,33 @@ impl Processor {
         options: &PreprocessorOptions,
         sources: &SourceDatabase,
     ) -> Result<Processed, (Vec<WorkspacePath>, Error)> {
+        Self::run_mode(path, options, sources, false).map(|(processed, _)| processed)
+    }
+
+    /// Project literal config structure without executing `__EXEC` bodies.
+    /// Every skipped body is returned as an explicit limitation. Consumers must
+    /// treat the entire result as provisional: side effects and `__EVAL`
+    /// results are unknown. Normal preprocessing remains strict.
+    ///
+    /// # Errors
+    /// See [`Error`]. Malformed/unclosed bodies are never recovered.
+    pub fn run_structure_with_sources(
+        path: &WorkspacePath,
+        options: &PreprocessorOptions,
+        sources: &SourceDatabase,
+    ) -> Result<(Processed, Codes), (Vec<WorkspacePath>, Error)> {
+        Self::run_mode(path, options, sources, true)
+    }
+
+    fn run_mode(
+        path: &WorkspacePath,
+        options: &PreprocessorOptions,
+        sources: &SourceDatabase,
+        structure_only: bool,
+    ) -> Result<(Processed, Codes), (Vec<WorkspacePath>, Error)> {
         let mut processor = Self {
             sources: sources.clone(),
+            structure_only,
             ..Self::default()
         };
 
@@ -186,7 +214,7 @@ impl Processor {
         expansions_store.build_interval_tree();
         processed.expansions = expansions_store;
 
-        Ok(processed)
+        Ok((processed, processor.structural_limitations))
     }
 
     fn file(
@@ -238,6 +266,10 @@ impl Processor {
             match (token.symbol(), in_quotes) {
                 (Symbol::Word(w), false) => {
                     if w == "__EXEC" {
+                        if self.structure_only {
+                            self.skip_exec(stream)?;
+                            continue;
+                        }
                         return Err(ExecNotSupported::code((**token).clone()));
                     }
                     if Defines::is_unsupported_builtin(w) {
@@ -320,6 +352,52 @@ impl Processor {
             quote = None;
         }
         Ok(())
+    }
+
+    /// Balance raw tokens only; do not expand or execute the skipped SQF.
+    fn skip_exec(
+        &mut self,
+        stream: &mut PeekMoreIterator<impl Iterator<Item = Arc<Token>>>,
+    ) -> Result<(), Error> {
+        let start = stream.next().expect("peeked __EXEC");
+        while stream
+            .peek()
+            .is_some_and(|token| token.symbol().is_whitespace() || token.symbol().is_newline())
+        {
+            stream.next();
+        }
+        if !stream
+            .peek()
+            .is_some_and(|token| token.symbol().is_left_paren())
+        {
+            return Err(ExecNotSupported::code((*start).clone()));
+        }
+        let mut depth = 0;
+        let mut quote: Option<Symbol> = None;
+        for token in stream {
+            match token.symbol() {
+                Symbol::Eoi => break,
+                Symbol::DoubleQuote | Symbol::SingleQuote => {
+                    if quote.as_ref() == Some(token.symbol()) {
+                        quote = None;
+                    } else if quote.is_none() {
+                        quote = Some(token.symbol().clone());
+                    }
+                }
+                Symbol::LeftParenthesis if quote.is_none() => depth += 1,
+                Symbol::RightParenthesis if quote.is_none() => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.structural_limitations
+                            .push(Arc::new(ExecNotSupported::new(Box::new((*start).clone()))));
+                        self.no_rapify = true;
+                        return Ok(());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(ExecNotSupported::code((*start).clone()))
     }
 
     /// Returns the current word, consuming it from the stream
