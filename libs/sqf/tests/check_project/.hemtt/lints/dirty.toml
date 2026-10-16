@@ -1,0 +1,3 @@
+message = "Raw source marker"
+[sqf.file]
+patterns = ["DIRTY_MARKER"]

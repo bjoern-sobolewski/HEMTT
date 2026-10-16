@@ -95,7 +95,12 @@ async fn check_addon(source: WorkspacePath, workspace: EditorWorkspace) {
                 let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
                 let checked = {
                     let _timer = crate::performance::Timer::start("config.lint");
-                    hemtt_config::check::check(&processed, config.as_ref())
+                    hemtt_config::check::check_with_sources(
+                        &processed,
+                        config.as_ref(),
+                        &source,
+                        &SourceSync::get().database(),
+                    )
                 };
                 let _timer = crate::performance::Timer::start("config.diagnostics");
                 for code in &checked.codes {
@@ -190,7 +195,7 @@ pub async fn process(url: Url, client: Client) {
     }
     let mut futures = JoinSet::new();
     for path in recheck_addons {
-        futures.spawn(check_addon(path.clone(), workspace.clone()));
+        futures.spawn(check_addon(path, workspace.clone()));
     }
     {
         futures.join_all().await;

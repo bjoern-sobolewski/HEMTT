@@ -7,8 +7,8 @@ use url::Url;
 
 use crate::workspace::EditorWorkspace;
 
-mod lints;
 pub mod export;
+mod lints;
 
 #[derive(Clone)]
 pub struct ConfigAnalyzer {

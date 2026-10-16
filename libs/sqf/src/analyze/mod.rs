@@ -8,13 +8,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use hemtt_common::config::{ProjectConfig, RuntimeArguments};
+use hemtt_common::{
+    config::{ProjectConfig, RuntimeArguments},
+    toml_lint::{TomlLintDef, TomlLintSqfTarget},
+};
 use hemtt_workspace::{
     addons::{Addon, DefinedFunctions, UsedFunctions},
     lint::LintManager,
     lint_manager,
     position::Position,
-    reporting::{Codes, Processed},
+    reporting::{Code, Codes, Processed, TomlLintCode},
 };
 use lints::s02_event_handlers::{
     EventHandlerRunner, LintS02EventIncorrectCommand, LintS02EventInsufficientVersion,
@@ -49,26 +52,16 @@ pub fn analyze(
     processed: &Processed,
     addon: Arc<Addon>,
     database: Arc<Database>,
+    manager: Option<Arc<LintManager<LintData>>>,
 ) -> (Codes, Option<SqfReport>) {
-    let mut manager: LintManager<LintData> = LintManager::new(
-        project.map_or_else(Default::default, |project| project.lints().sqf().clone()),
-        project.map_or_else(RuntimeArguments::default, |p| p.runtime().clone()),
-    );
-    if let Err(lint_errors) =
-        manager.extend(SQF_LINTS.iter().map(|l| (**l).clone()).collect::<Vec<_>>())
-    {
-        return (lint_errors, None);
-    }
-    if let Err(lint_errors) = manager.push_group(
-        vec![
-            Arc::new(Box::new(LintS02EventUnknown)),
-            Arc::new(Box::new(LintS02EventIncorrectCommand)),
-            Arc::new(Box::new(LintS02EventInsufficientVersion)),
-        ],
-        Box::new(EventHandlerRunner),
-    ) {
-        return (lint_errors, None);
-    }
+    let manager: Arc<LintManager<LintData>> = if let Some(manager) = manager {
+        manager
+    } else {
+        match create_lint_manager(project) {
+            Ok(manager) => Arc::new(manager),
+            Err(codes) => return (codes, None),
+        }
+    };
     let localizations = Arc::new(Mutex::new(vec![]));
     let functions_used = Arc::new(Mutex::new(vec![]));
     let functions_defined = Arc::new(Mutex::new(HashSet::new()));
@@ -105,6 +98,31 @@ pub fn analyze(
             functions_defined,
         }),
     )
+}
+
+pub fn analyze_toml(
+    _statements: &Statements,
+    source: &str,
+    path: &hemtt_workspace::WorkspacePath,
+    project: Option<&ProjectConfig>,
+    _processed: &Processed,
+) -> Codes {
+    let Some(lints) = project.map(hemtt_common::config::ProjectConfig::toml_lints) else {
+        return Vec::new();
+    };
+    if lints.is_empty() {
+        return Vec::new();
+    }
+    let mut codes = Codes::new();
+    for lint in lints {
+        let Some(TomlLintDef::Patterns(patterns)) = lint.sqf().get(&TomlLintSqfTarget::File) else {
+            continue;
+        };
+        for range in lint.run_file(source, patterns) {
+            codes.push(Arc::new(TomlLintCode::new_file(lint, range, path)));
+        }
+    }
+    codes
 }
 
 pub type Localizations = Vec<(String, Position)>;
@@ -346,40 +364,46 @@ fn extract_constant(expression: &Expression) -> Option<(String, bool)> {
     None
 }
 #[must_use]
-/// Checks if a function returns true for any sub-expression
-fn check_expression_deep(expression: &Expression, f: &impl Fn(&Expression) -> bool) -> bool {
-    match expression {
-        Expression::Array(elements, _) => {
-            for element in elements {
-                if check_expression_deep(element, f) {
-                    return true;
+/// Deeply collects all results from the expression tree that match the given pattern function.
+fn pattern_collect<T>(expr: &Expression, f: &impl Fn(&Expression) -> Option<T>) -> Vec<T> {
+    fn collect_inner<T>(
+        expr: &Expression,
+        f: &impl Fn(&Expression) -> Option<T>,
+        results: &mut Vec<T>,
+    ) {
+        if let Some(result) = f(expr) {
+            results.push(result);
+        }
+        match expr {
+            Expression::Array(elements, _) => {
+                for element in elements {
+                    collect_inner(element, f, results);
                 }
             }
-        }
-        Expression::Code(statements) => {
-            for statement in &statements.content {
-                match statement {
-                    Statement::Expression(expr, _)
-                    | Statement::AssignLocal(_, expr, _)
-                    | Statement::AssignGlobal(_, expr, _) => {
-                        if check_expression_deep(expr, f) {
-                            return true;
+            Expression::UnaryCommand(_, rhs, _) => {
+                collect_inner(rhs, f, results);
+            }
+            Expression::BinaryCommand(_, lhs, rhs, _) => {
+                collect_inner(lhs, f, results);
+                collect_inner(rhs, f, results);
+            }
+            Expression::Code(statements) => {
+                for stmt in &statements.content {
+                    match stmt {
+                        Statement::Expression(inner, _)
+                        | Statement::AssignLocal(_, inner, _)
+                        | Statement::AssignGlobal(_, inner, _) => {
+                            collect_inner(inner, f, results);
                         }
                     }
                 }
             }
+            _ => {}
         }
-        Expression::UnaryCommand(_, expr, _) if check_expression_deep(expr, f) => {
-            return true;
-        }
-        Expression::BinaryCommand(_, left, right, _)
-            if (check_expression_deep(left, f) || check_expression_deep(right, f)) =>
-        {
-            return true;
-        }
-        _ => {}
     }
-    f(expression)
+    let mut results = Vec::new();
+    collect_inner(expr, f, &mut results);
+    results
 }
 
 #[must_use]
@@ -388,15 +412,8 @@ pub fn lint_all(
     project_config: Option<&ProjectConfig>,
     addons: &Vec<Addon>,
     database: Arc<Database>,
+    manager: &LintManager<LintData>,
 ) -> Codes {
-    let mut manager = LintManager::new(
-        project_config.map_or_else(Default::default, |project| project.lints().sqf().clone()),
-        project_config.map_or_else(RuntimeArguments::default, |p| p.runtime().clone()),
-    );
-    if let Err(e) = manager.extend(SQF_LINTS.iter().map(|l| (**l).clone()).collect::<Vec<_>>()) {
-        return e;
-    }
-
     manager.run(
         &LintData {
             addon: None,
@@ -409,4 +426,30 @@ pub fn lint_all(
         None,
         addons,
     )
+}
+
+/// Creates and configures the SQF lint manager.
+/// # Errors
+/// Returns Lint Manager or Err containing the lint error codes.
+pub fn create_lint_manager(
+    project: Option<&ProjectConfig>,
+) -> Result<LintManager<LintData>, Vec<Arc<dyn Code>>> {
+    let mut manager: LintManager<LintData> = LintManager::new(
+        project.map_or_else(Default::default, |project| project.lints().sqf().clone()),
+        project.map_or_else(RuntimeArguments::default, |p| p.runtime().clone()),
+    );
+    manager.extend(SQF_LINTS.iter().map(|l| (**l).clone()).collect::<Vec<_>>())?;
+    manager.push_group(
+        vec![
+            Arc::new(Box::new(LintS02EventUnknown)),
+            Arc::new(Box::new(LintS02EventIncorrectCommand)),
+            Arc::new(Box::new(LintS02EventInsufficientVersion)),
+        ],
+        Box::new(EventHandlerRunner),
+    )?;
+    let codes = manager.check_config_usage("sqf", "s");
+    if !codes.is_empty() {
+        return Err(codes);
+    }
+    Ok(manager)
 }

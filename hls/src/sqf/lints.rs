@@ -126,7 +126,15 @@ async fn check_sqf(
                 let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
                 let checked = {
                     let _timer = crate::performance::Timer::start("sqf.lint");
-                    hemtt_sqf::check::check(&processed, config.as_ref(), &addon, database)
+                    hemtt_sqf::check::check_with_sources(
+                        &processed,
+                        config.as_ref(),
+                        &addon,
+                        &source,
+                        database,
+                        None,
+                        &SourceSync::get().database(),
+                    )
                 };
                 if let Some(report) = checked.report {
                     let cache = SqfAnalyzer::get();
@@ -238,12 +246,7 @@ impl SqfAnalyzer {
             let Some(addon) = addon_for(&workspace, &path) else {
                 continue;
             };
-            futures.spawn(check_sqf(
-                path.clone(),
-                addon,
-                workspace.clone(),
-                database.clone(),
-            ));
+            futures.spawn(check_sqf(path, addon, workspace.clone(), database.clone()));
         }
         {
             futures.join_all().await;

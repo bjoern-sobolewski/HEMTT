@@ -1,6 +1,9 @@
 pub mod macros;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use codespan_reporting::diagnostic::Severity;
 use hemtt_common::config::{
@@ -46,7 +49,7 @@ pub trait LintRunner<D> {
     }
 }
 
-pub trait AnyLintRunner<D> {
+pub trait AnyLintRunner<D>: Send + Sync {
     fn run(
         &self,
         project: Option<&ProjectConfig>,
@@ -58,7 +61,7 @@ pub trait AnyLintRunner<D> {
     ) -> Codes;
 }
 
-impl<T: LintRunner<D>, D> AnyLintRunner<D> for T {
+impl<T: LintRunner<D> + Send + Sync, D> AnyLintRunner<D> for T {
     fn run(
         &self,
         project: Option<&ProjectConfig>,
@@ -93,7 +96,7 @@ pub trait LintGroupRunner<D> {
     }
 }
 
-pub trait AnyLintGroupRunner<D> {
+pub trait AnyLintGroupRunner<D>: Send + Sync {
     fn accepts(&self, target: &dyn std::any::Any) -> bool;
     fn run(
         &self,
@@ -106,7 +109,7 @@ pub trait AnyLintGroupRunner<D> {
     ) -> Codes;
 }
 
-impl<T: LintGroupRunner<D>, D> AnyLintGroupRunner<D> for T {
+impl<T: LintGroupRunner<D> + Send + Sync, D> AnyLintGroupRunner<D> for T {
     fn accepts(&self, target: &dyn std::any::Any) -> bool {
         target.is::<T::Target>()
     }
@@ -135,6 +138,7 @@ pub struct LintManager<D> {
     prepared: Vec<(LintConfig, Vec<Box<dyn AnyLintRunner<D>>>)>,
     groups: Vec<(HashMap<String, LintConfig>, Box<dyn AnyLintGroupRunner<D>>)>,
     configs: HashMap<String, LintConfigOverride>,
+    used_configs: HashSet<String>,
     runtime: RuntimeArguments,
 }
 
@@ -146,6 +150,7 @@ impl<D> LintManager<D> {
             prepared: vec![],
             groups: vec![],
             configs,
+            used_configs: HashSet::new(),
             runtime,
         }
     }
@@ -209,7 +214,7 @@ impl<D> LintManager<D> {
     ///
     /// # Errors
     /// Returns a list of lints that are enabled OR codes if the lint config is invalid
-    pub fn check_and_filter(&self, lints: Lints<D>) -> Result<Lints<D>, Codes> {
+    pub fn check_and_filter(&mut self, lints: Lints<D>) -> Result<Lints<D>, Codes> {
         fn enabled(config: &LintConfig, runtime: &RuntimeArguments) -> bool {
             config.enabled() == LintEnabled::Enabled
                 || (runtime.is_pedantic() && config.enabled() == LintEnabled::Pedantic)
@@ -224,6 +229,7 @@ impl<D> LintManager<D> {
             }
             let mut config = lint.default_config();
             if let Some(config_override) = self.configs.get(lint.ident()) {
+                self.used_configs.insert(lint.ident().to_string());
                 config = config_override.apply(config);
                 if config.severity() < lint.minimum_severity() {
                     errors.push(Arc::new(InvalidLintConfig {
@@ -278,6 +284,36 @@ impl<D> LintManager<D> {
         }
         codes
     }
+
+    #[must_use]
+    /// Checks configured lints and reports entries that are unused.
+    /// # Panics
+    pub fn check_config_usage(&self, lint_name: &str, lint_prefix: &str) -> Codes {
+        self.configs
+            .keys()
+            .filter(|config| !self.used_configs.contains(*config))
+            .map(|config| {
+                let possible = self.lints.iter().find_map(|lint| {
+                    if config.eq_ignore_ascii_case(
+                        format!("{}{:02}", lint_prefix, lint.sort() / 10).as_str(),
+                    ) || config.eq_ignore_ascii_case(
+                        format!("L-{}{:02}", lint_prefix, lint.sort() / 10).as_str(),
+                    ) || config.eq_ignore_ascii_case(format!("{:02}", lint.sort() / 10).as_str())
+                    {
+                        Some(format!("Did you mean `{lint_name}.{}`?", lint.ident()))
+                    } else {
+                        None
+                    }
+                });
+                Arc::new(UnusedLintConfig {
+                    message: format!(
+                        "Lint config `{lint_name}.{config}` does not exist and has no effect"
+                    ),
+                    possible,
+                }) as Arc<dyn Code>
+            })
+            .collect()
+    }
 }
 
 struct InvalidLintConfig {
@@ -294,6 +330,28 @@ impl Code for InvalidLintConfig {
 
     fn diagnostic(&self) -> Option<Diagnostic> {
         Some(Diagnostic::from_code(self))
+    }
+}
+
+struct UnusedLintConfig {
+    message: String,
+    possible: Option<String>,
+}
+impl Code for UnusedLintConfig {
+    fn ident(&self) -> &'static str {
+        "ULC"
+    }
+    fn message(&self) -> String {
+        self.message.clone()
+    }
+    fn diagnostic(&self) -> Option<Diagnostic> {
+        Some(Diagnostic::from_code(self))
+    }
+    fn severity(&self) -> Severity {
+        Severity::Warning
+    }
+    fn help(&self) -> Option<String> {
+        self.possible.clone()
     }
 }
 
@@ -385,6 +443,26 @@ mod tests {
         ) -> Codes {
             vec![Arc::new(CodeA)]
         }
+    }
+
+    #[test]
+    fn prepared_managers_are_shareable_and_keep_config_validation() {
+        fn shareable<T: Send + Sync>() {}
+        shareable::<LintManager<()>>();
+        let known = LintConfigOverride::default();
+        let mut manager = LintManager::new(
+            HashMap::from([
+                ("LintA".into(), known.clone()),
+                ("misspelled".into(), known),
+            ]),
+            RuntimeArguments::default(),
+        );
+        manager.push(Arc::new(Box::new(LintA))).expect("valid lint");
+        let codes = manager.check_config_usage("config", "c");
+        assert_eq!(codes.len(), 1);
+        assert_eq!(codes[0].ident(), "ULC");
+        assert!(codes[0].message().contains("misspelled"));
+        assert_eq!(manager.run(&(), None, None, &TypeA)[0].ident(), "CodeA");
     }
 
     struct LintB;

@@ -8,7 +8,6 @@ use hemtt_config::{
 use hemtt_workspace::{
     WorkspacePath,
     addons::{Addon, Location},
-    reporting::CodesExt,
 };
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 
@@ -96,8 +95,12 @@ pub fn rapify(addon: &Addon, path: &WorkspacePath, ctx: &Context) -> Result<Repo
             return Err(e.into());
         }
     };
-    let checked = hemtt_config::check::check(&processed, Some(ctx.config()));
-    let had_errors = checked.codes.failed();
+    let checked = hemtt_config::check::check_with_sources(
+        &processed,
+        Some(ctx.config()),
+        path,
+        ctx.sources(),
+    );
     for code in checked.codes {
         report.push(code);
     }
@@ -105,7 +108,7 @@ pub fn rapify(addon: &Addon, path: &WorkspacePath, ctx: &Context) -> Result<Repo
         return Ok(report);
     };
     configreport.push_to_addon(addon);
-    if had_errors {
+    if report.failed() {
         return Ok(report);
     }
     let out = if std::path::Path::new(&path.filename())

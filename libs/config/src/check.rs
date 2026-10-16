@@ -47,6 +47,33 @@ pub fn check(processed: &Processed, project: Option<&ProjectConfig>) -> Checked 
     }
 }
 
+/// Check raw-file TOML lints against the same source snapshot as preprocessing.
+#[must_use]
+pub fn check_with_sources(
+    processed: &Processed,
+    project: Option<&ProjectConfig>,
+    path: &hemtt_workspace::WorkspacePath,
+    sources: &hemtt_workspace::SourceDatabase,
+) -> Checked {
+    let mut checked = check(processed, project);
+    if project.is_some_and(|p| !p.toml_lints().is_empty())
+        && let Some(report) = &checked.config
+    {
+        checked.codes.extend(crate::analyze::analyze_toml(
+            report.config(),
+            sources
+                .source_for_path(path)
+                .expect("Failed to read config file")
+                .1
+                .content(),
+            path,
+            project,
+            processed,
+        ));
+    }
+    checked
+}
+
 #[cfg(test)]
 mod tests {
     use hemtt_workspace::{Workspace, reporting::Codes, reporting::Processed};
@@ -107,5 +134,54 @@ mod tests {
                 .iter()
                 .any(|code| { code.severity() == hemtt_workspace::reporting::Severity::Error })
         );
+    }
+
+    #[test]
+    fn config_toml_lints_follow_dirty_source_and_discard() {
+        use hemtt_common::config::{PDriveOption, PreprocessorOptions, ProjectConfig};
+        use hemtt_workspace::SourceDatabase;
+        use std::io::Write;
+        let project = ProjectConfig::from_file(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/check_project/.hemtt/project.toml"),
+        )
+        .expect("project");
+        let workspace = Workspace::builder()
+            .memory()
+            .finish(None, false, &PDriveOption::Disallow)
+            .expect("workspace");
+        let path = workspace.join("config.cpp").expect("path");
+        path.create_file()
+            .expect("create")
+            .write_all(b"class Test {};")
+            .expect("write");
+        let sources = SourceDatabase::new();
+        let id = sources.file_id(&path);
+        for (version, text, expected) in [
+            (1, "// DIRTY_MARKER\nclass Test {};", true),
+            (2, "class Test {};", false),
+        ] {
+            sources.set_overlay(id, text, version);
+            let processed = hemtt_preprocessor::Processor::run_with_sources(
+                &path,
+                &PreprocessorOptions::default(),
+                &sources,
+            )
+            .expect("preprocess");
+            let result = super::check_with_sources(&processed, Some(&project), &path, &sources);
+            assert_eq!(idents(&result.codes).contains(&"L-TOML"), expected);
+        }
+        sources.clear_overlay(id);
+        let processed = hemtt_preprocessor::Processor::run_with_sources(
+            &path,
+            &PreprocessorOptions::default(),
+            &sources,
+        )
+        .expect("preprocess");
+        assert!(
+            !idents(&super::check_with_sources(&processed, Some(&project), &path, &sources).codes)
+                .contains(&"L-TOML")
+        );
+        assert_eq!(path.read_to_string().expect("disk"), "class Test {};");
     }
 }

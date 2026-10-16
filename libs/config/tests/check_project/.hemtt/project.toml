@@ -1,0 +1,2 @@
+name = "Check config source regressions"
+prefix = "check"

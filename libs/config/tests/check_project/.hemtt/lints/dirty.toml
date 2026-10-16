@@ -1,0 +1,3 @@
+message = "Raw config marker"
+[config.file]
+patterns = ["DIRTY_MARKER"]

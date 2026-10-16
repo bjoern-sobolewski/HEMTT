@@ -27,6 +27,7 @@ mod diag_manager;
 mod files;
 mod p3d;
 mod paa;
+mod path;
 mod performance;
 mod positions;
 mod preprocessor;
@@ -394,6 +395,7 @@ async fn server() {
     .custom_method("hemtt/paa/p3d", Backend::paa_p3d)
     .custom_method("hemtt/paa/convert", Backend::paa_convert)
     .custom_method("hemtt/processed", Backend::processed)
+    .custom_method("hemtt/path_copy", Backend::path_copy)
     .custom_method("hemtt/config/structure", Backend::config_structure)
     .custom_method("hemtt/performance", Backend::performance)
     .custom_method("hemtt/sqf/compiled", Backend::sqf_compiled)

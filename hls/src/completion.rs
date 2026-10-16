@@ -11,6 +11,17 @@ use crate::config::ConfigAnalyzer;
 use crate::sqf::SqfAnalyzer;
 use crate::workspace::EditorWorkspace;
 
+// LSP columns count UTF-16 units; preserve whitespace and never split a code point.
+fn utf16_prefix(line: &str, column: usize) -> String {
+    let mut units = 0;
+    line.chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units <= column
+        })
+        .collect()
+}
+
 pub async fn completion(
     position: TextDocumentPositionParams,
     _context: Option<CompletionContext>,
@@ -38,17 +49,7 @@ pub async fn completion(
     let text_at_cursor = text
         .lines()
         .nth(position.position.line as usize)
-        .map(|line| {
-            // LSP columns count UTF-16 units, not UTF-8 byte offsets. Never
-            // slice through a Unicode code point when completing after text.
-            let mut units = 0;
-            line.chars()
-                .take_while(|c| {
-                    units += c.len_utf16();
-                    units <= position.position.character as usize
-                })
-                .collect::<String>()
-        })
+        .map(|line| utf16_prefix(line, position.position.character as usize))
         .unwrap_or_default();
     let split: Vec<&str> = text_at_cursor.rsplit(' ').collect();
     let mut prefix = (*split.first().unwrap_or(&"")).to_string();
@@ -262,7 +263,7 @@ fn path(workspace: &EditorWorkspace, folder: &str, addon: &str, path: &str) -> V
         } else if item.is_dir().unwrap_or(false) {
             let dir_name = item.filename();
             items.push(CompletionItem {
-                label: dir_name.clone(),
+                label: dir_name,
                 kind: Some(CompletionItemKind::FOLDER),
                 ..Default::default()
             });
@@ -281,6 +282,14 @@ mod tests {
 
     use super::path;
     use crate::workspace::tests::fixture;
+
+    #[test]
+    fn completion_prefix_uses_utf16_without_trimming_spaces() {
+        assert_eq!(super::utf16_prefix("é😀 hint  ", 10), "é😀 hint  ");
+        assert_eq!(super::utf16_prefix("é😀 hint", 2), "é");
+        assert_eq!(super::utf16_prefix("é😀 hint", 3), "é😀");
+        assert_eq!(super::utf16_prefix("hint  ", 99), "hint  ");
+    }
 
     #[test]
     fn lists_addon_files() {

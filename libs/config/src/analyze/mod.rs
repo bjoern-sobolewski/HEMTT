@@ -3,13 +3,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use hemtt_common::config::{ProjectConfig, RuntimeArguments};
+use hemtt_common::{
+    config::{ProjectConfig, RuntimeArguments},
+    toml_lint::{TomlLintConfigTarget, TomlLintDef},
+};
 use hemtt_workspace::{
     addons::{Addon, DefinedFunctions, MagazineWellInfo},
     lint::LintManager,
     lint_manager,
     position::Position,
-    reporting::{Codes, Processed},
+    reporting::{Codes, Processed, TomlLintCode},
 };
 
 mod cfgpatch;
@@ -214,8 +217,8 @@ pub fn lint_all(project: Option<&ProjectConfig>, addons: &Vec<Addon>) -> Codes {
             .map(|l| (**l).clone())
             .collect::<Vec<_>>(),
     );
-
-    manager.run(
+    let mut codes = manager.check_config_usage("config", "c");
+    codes.extend(manager.run(
         &LintData {
             path: String::new(),
             localizations: Arc::new(Mutex::new(vec![])),
@@ -225,5 +228,32 @@ pub fn lint_all(project: Option<&ProjectConfig>, addons: &Vec<Addon>) -> Codes {
         project,
         None,
         addons,
-    )
+    ));
+    codes
+}
+
+pub fn analyze_toml(
+    _config: &Config,
+    source: &str,
+    path: &hemtt_workspace::WorkspacePath,
+    project: Option<&ProjectConfig>,
+    _processed: &Processed,
+) -> Codes {
+    let Some(lints) = project.map(hemtt_common::config::ProjectConfig::toml_lints) else {
+        return Vec::new();
+    };
+    if lints.is_empty() {
+        return Vec::new();
+    }
+    let mut codes = Codes::new();
+    for lint in lints {
+        let Some(TomlLintDef::Patterns(patterns)) = lint.config().get(&TomlLintConfigTarget::File)
+        else {
+            continue;
+        };
+        for range in lint.run_file(source, patterns) {
+            codes.push(Arc::new(TomlLintCode::new_file(lint, range, path)));
+        }
+    }
+    codes
 }
