@@ -22,10 +22,12 @@ mod audio;
 mod color;
 mod completion;
 mod config;
+mod dependencies;
 mod diag_manager;
 mod files;
 mod p3d;
 mod paa;
+mod performance;
 mod positions;
 mod preprocessor;
 mod rpt;
@@ -302,6 +304,9 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
+    async fn performance(&self) -> Result<Value> {
+        Ok(performance::snapshot())
+    }
     /// Recheck a file the client told us was created, deleted, or renamed.
     async fn resave(&self, uri: &str) {
         let Ok(url) = Url::from_str(uri) else {
@@ -385,6 +390,7 @@ async fn server() {
     .custom_method("hemtt/paa/p3d", Backend::paa_p3d)
     .custom_method("hemtt/paa/convert", Backend::paa_convert)
     .custom_method("hemtt/processed", Backend::processed)
+    .custom_method("hemtt/performance", Backend::performance)
     .custom_method("hemtt/sqf/compiled", Backend::sqf_compiled)
     .custom_method("hemtt/rpt/locate", Backend::locate_rpt)
     .finish();

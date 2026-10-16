@@ -223,6 +223,7 @@ impl EditorWorkspace {
     }
 
     pub fn config(&self) -> Option<ProjectConfig> {
+        let _timer = crate::performance::Timer::start("workspace.config");
         let path = self.root.join(".hemtt").join("project.toml");
         if path.is_file() {
             match ProjectConfig::from_file(&path) {

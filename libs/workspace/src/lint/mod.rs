@@ -94,6 +94,7 @@ pub trait LintGroupRunner<D> {
 }
 
 pub trait AnyLintGroupRunner<D> {
+    fn accepts(&self, target: &dyn std::any::Any) -> bool;
     fn run(
         &self,
         project: Option<&ProjectConfig>,
@@ -106,6 +107,9 @@ pub trait AnyLintGroupRunner<D> {
 }
 
 impl<T: LintGroupRunner<D>, D> AnyLintGroupRunner<D> for T {
+    fn accepts(&self, target: &dyn std::any::Any) -> bool {
+        target.is::<T::Target>()
+    }
     fn run(
         &self,
         project: Option<&ProjectConfig>,
@@ -128,7 +132,8 @@ pub type Lints<D> = Vec<Arc<Box<dyn Lint<D>>>>;
 #[allow(clippy::module_name_repetitions)]
 pub struct LintManager<D> {
     lints: Lints<D>,
-    groups: Vec<(Lints<D>, Box<dyn AnyLintGroupRunner<D>>)>,
+    prepared: Vec<(LintConfig, Vec<Box<dyn AnyLintRunner<D>>>)>,
+    groups: Vec<(HashMap<String, LintConfig>, Box<dyn AnyLintGroupRunner<D>>)>,
     configs: HashMap<String, LintConfigOverride>,
     runtime: RuntimeArguments,
 }
@@ -138,6 +143,7 @@ impl<D> LintManager<D> {
     pub fn new(configs: HashMap<String, LintConfigOverride>, runtime: RuntimeArguments) -> Self {
         Self {
             lints: vec![],
+            prepared: vec![],
             groups: vec![],
             configs,
             runtime,
@@ -151,7 +157,7 @@ impl<D> LintManager<D> {
     pub fn push(&mut self, lint: Arc<Box<dyn Lint<D>>>) -> Result<(), Codes> {
         let lints: Lints<D> = vec![lint];
         let lints = self.check_and_filter(lints)?;
-        self.lints.extend(lints);
+        self.prepare(lints);
         Ok(())
     }
 
@@ -161,7 +167,7 @@ impl<D> LintManager<D> {
     /// Returns a list of codes if the lint config is invalid
     pub fn extend(&mut self, lints: Lints<D>) -> Result<(), Codes> {
         let lints = self.check_and_filter(lints)?;
-        self.lints.extend(lints);
+        self.prepare(lints);
         Ok(())
     }
 
@@ -175,8 +181,28 @@ impl<D> LintManager<D> {
         runner: Box<dyn AnyLintGroupRunner<D>>,
     ) -> Result<(), Codes> {
         let lints = self.check_and_filter(lints)?;
-        self.groups.push((lints, runner));
+        let configs = lints
+            .iter()
+            .map(|lint| (lint.ident().to_string(), self.effective_config(lint)))
+            .collect();
+        self.groups.push((configs, runner));
         Ok(())
+    }
+
+    fn effective_config(&self, lint: &Arc<Box<dyn Lint<D>>>) -> LintConfig {
+        self.configs
+            .get(lint.ident())
+            .map_or_else(|| lint.default_config(), |c| c.apply(lint.default_config()))
+    }
+
+    fn prepare(&mut self, lints: Lints<D>) {
+        // Config and runner construction are invariant for this manager. An
+        // AST can visit thousands of targets; prepare once per compilation unit.
+        for lint in &lints {
+            self.prepared
+                .push((self.effective_config(lint), lint.runners()));
+        }
+        self.lints.extend(lints);
     }
 
     /// Check if the lints are valid
@@ -232,37 +258,25 @@ impl<D> LintManager<D> {
         processed: Option<&Processed>,
         target: &dyn std::any::Any,
     ) -> Codes {
-        self.lints
-            .iter()
-            .flat_map(|lint| {
-                let config = self
-                    .configs
-                    .get(lint.ident())
-                    .cloned()
-                    .map_or_else(|| lint.default_config(), |c| c.apply(lint.default_config()));
-                lint.runners()
-                    .iter()
-                    .flat_map(|runner| {
-                        runner.run(project, &config, processed, &self.runtime, target, data)
-                    })
-                    .collect::<Codes>()
-            })
-            .chain(self.groups.iter().flat_map(|(lints, runner)| {
-                let mut configs = HashMap::with_capacity(lints.len());
-                for lint in lints {
-                    let config = self
-                        .configs
-                        .get(lint.ident())
-                        .cloned()
-                        .map_or_else(|| lint.default_config(), |c| c.apply(lint.default_config()));
-                    configs.insert(lint.ident().to_string(), config);
-                }
-                if configs.is_empty() {
-                    return vec![];
-                }
-                runner.run(project, configs, processed, &self.runtime, target, data)
-            }))
-            .collect()
+        let mut codes = Vec::new();
+        for (config, runners) in &self.prepared {
+            for runner in runners {
+                codes.extend(runner.run(project, config, processed, &self.runtime, target, data));
+            }
+        }
+        for (configs, runner) in &self.groups {
+            if !configs.is_empty() && runner.accepts(target) {
+                codes.extend(runner.run(
+                    project,
+                    configs.clone(),
+                    processed,
+                    &self.runtime,
+                    target,
+                    data,
+                ));
+            }
+        }
+        codes
     }
 }
 
@@ -418,13 +432,28 @@ mod tests {
     }
 
     #[test]
+    fn invalid_registration_preserves_prepared_lints() {
+        let mut manager = LintManager::new(HashMap::new(), RuntimeArguments::default());
+        manager.push(Arc::new(Box::new(LintA))).expect("valid lint");
+        assert!(
+            manager
+                .extend(vec![Arc::new(Box::new(LintA)), Arc::new(Box::new(LintB))])
+                .is_err()
+        );
+        assert_eq!(manager.run(&(), None, None, &TypeA).len(), 1);
+        assert!(manager.run(&(), None, None, &TypeB).is_empty());
+        manager
+            .push(Arc::new(Box::new(LintB)))
+            .expect("valid lint after rejected registration");
+        assert_eq!(manager.run(&(), None, None, &TypeB)[0].ident(), "CodeB");
+    }
+
+    #[test]
     fn lint_manager() {
-        let manager = LintManager {
-            lints: vec![Arc::new(Box::new(LintA)), Arc::new(Box::new(LintB))],
-            groups: vec![],
-            configs: HashMap::new(),
-            runtime: RuntimeArguments::default(),
-        };
+        let mut manager = LintManager::new(HashMap::new(), RuntimeArguments::default());
+        manager
+            .extend(vec![Arc::new(Box::new(LintA)), Arc::new(Box::new(LintB))])
+            .expect("valid lints");
 
         let target_a = TypeA;
         let target_b = TypeB;

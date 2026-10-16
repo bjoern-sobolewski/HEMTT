@@ -18,19 +18,15 @@ use crate::{
     workspace::{EditorWorkspace, EditorWorkspaces},
 };
 
-struct CacheBundle {
-    pub sources: Vec<WorkspacePath>,
-}
-
 #[derive(Clone)]
 struct Cache {
-    files: Arc<RwLock<HashMap<WorkspacePath, CacheBundle>>>,
+    files: Arc<RwLock<crate::dependencies::Dependencies>>,
 }
 
 impl Cache {
     pub fn get() -> Self {
         static SINGLETON: LazyLock<Cache> = LazyLock::new(|| Cache {
-            files: Arc::new(RwLock::new(HashMap::new())),
+            files: Arc::new(RwLock::new(crate::dependencies::Dependencies::default())),
         });
         (*SINGLETON).clone()
     }
@@ -73,27 +69,35 @@ fn check_addons(workspace: &EditorWorkspace, client: Client) {
 }
 
 async fn check_addon(source: WorkspacePath, workspace: EditorWorkspace) {
+    let _timer = crate::performance::Timer::start("config.check");
     let Some(manager) = DiagManager::get() else {
         warn!("failed to get diag manager");
         return;
     };
-    manager.clear_current(&format!("config:{}", source.as_str()));
     let mut lsp_diags = HashMap::new();
+    let config = workspace.config();
     #[allow(clippy::or_fun_call)]
-    let sources = match Processor::run_with_sources(
-        &source,
-        workspace
-            .config()
-            .as_ref()
-            .map_or(&hemtt_common::config::PreprocessorOptions::default(), |f| {
-                f.preprocessor()
-            }),
-        &SourceSync::get().database(),
-    ) {
+    let processed = {
+        let _timer = crate::performance::Timer::start("config.preprocess");
+        Processor::run_with_sources(
+            &source,
+            config
+                .as_ref()
+                .map_or(&hemtt_common::config::PreprocessorOptions::default(), |f| {
+                    f.preprocessor()
+                }),
+            &SourceSync::get().database(),
+        )
+    };
+    let sources = match processed {
         Ok(processed) => {
             {
                 let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
-                let checked = hemtt_config::check::check(&processed, workspace.config().as_ref());
+                let checked = {
+                    let _timer = crate::performance::Timer::start("config.lint");
+                    hemtt_config::check::check(&processed, config.as_ref())
+                };
+                let _timer = crate::performance::Timer::start("config.diagnostics");
                 for code in &checked.codes {
                     let Some(diag) = code.diagnostic() else {
                         continue;
@@ -148,23 +152,14 @@ async fn check_addon(source: WorkspacePath, workspace: EditorWorkspace) {
             err_sources
         }
     };
-    for (file, diags) in lsp_diags {
-        manager.set_current(
-            format!("config:{}", source.as_str()),
-            &workspace.to_url(&file),
-            diags,
-        );
-    }
-    let cache = Cache::get();
-    if sources.is_empty() {
-        cache.files.write().await.remove(&source);
-    } else {
-        cache
-            .files
-            .write()
-            .await
-            .insert(source.clone(), CacheBundle { sources });
-    }
+    manager.replace_scope(
+        format!("config:{}", workspace.to_url(&source)),
+        lsp_diags
+            .into_iter()
+            .map(|(file, diagnostics)| (workspace.to_url(&file), diagnostics))
+            .collect(),
+    );
+    Cache::get().files.write().await.replace(source, sources);
 }
 
 pub fn workspace_added(workspace: &EditorWorkspace, client: Client) {
@@ -182,21 +177,10 @@ pub async fn process(url: Url, client: Client) {
     };
     let project_change = url.as_str().contains(".toml");
     let mut recheck_addons = {
+        let _timer = crate::performance::Timer::start("config.dependencies");
         let cache = Cache::get();
         let files = cache.files.read().await;
-        files
-            .iter()
-            .filter_map(|(path, bundle)| {
-                if project_change {
-                    return Some(path.clone());
-                }
-                if &saved == path || bundle.sources.contains(&saved) {
-                    Some(path.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
+        files.affected(&saved, project_change)
     };
     if !recheck_addons.contains(&saved)
         && saved.exists().unwrap_or(false)

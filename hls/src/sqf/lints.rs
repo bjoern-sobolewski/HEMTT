@@ -21,19 +21,15 @@ use crate::{
 
 use super::SqfAnalyzer;
 
-struct CacheBundle {
-    pub sources: Vec<WorkspacePath>,
-}
-
 #[derive(Clone)]
 struct Cache {
-    files: Arc<RwLock<HashMap<WorkspacePath, CacheBundle>>>,
+    files: Arc<RwLock<crate::dependencies::Dependencies>>,
 }
 
 impl Cache {
     pub fn get() -> Self {
         static SINGLETON: LazyLock<Cache> = LazyLock::new(|| Cache {
-            files: Arc::new(RwLock::new(HashMap::new())),
+            files: Arc::new(RwLock::new(crate::dependencies::Dependencies::default())),
         });
         (*SINGLETON).clone()
     }
@@ -103,33 +99,35 @@ async fn check_sqf(
     workspace: EditorWorkspace,
     database: Arc<Database>,
 ) {
+    let _timer = crate::performance::Timer::start("sqf.check");
     let Some(manager) = DiagManager::get() else {
         warn!("failed to get diag manager");
         return;
     };
-    manager.clear_current(&format!("sqf:{}", source.as_str()));
 
     let mut lsp_diags = HashMap::new();
+    let config = workspace.config();
     #[allow(clippy::or_fun_call)]
-    let sources = match Processor::run_with_sources(
-        &source,
-        workspace
-            .config()
-            .as_ref()
-            .map_or(&hemtt_common::config::PreprocessorOptions::default(), |f| {
-                f.preprocessor()
-            }),
-        &SourceSync::get().database(),
-    ) {
+    let processed = {
+        let _timer = crate::performance::Timer::start("sqf.preprocess");
+        Processor::run_with_sources(
+            &source,
+            config
+                .as_ref()
+                .map_or(&hemtt_common::config::PreprocessorOptions::default(), |f| {
+                    f.preprocessor()
+                }),
+            &SourceSync::get().database(),
+        )
+    };
+    let sources = match processed {
         Ok(processed) => {
             {
                 let workspace_files = WorkspaceFiles::with_sources(SourceSync::get().database());
-                let checked = hemtt_sqf::check::check(
-                    &processed,
-                    workspace.config().as_ref(),
-                    &addon,
-                    database,
-                );
+                let checked = {
+                    let _timer = crate::performance::Timer::start("sqf.lint");
+                    hemtt_sqf::check::check(&processed, config.as_ref(), &addon, database)
+                };
                 if let Some(report) = checked.report {
                     let cache = SqfAnalyzer::get();
                     let mut functions_defined = cache
@@ -141,6 +139,7 @@ async fn check_sqf(
                         report.functions_defined().clone(),
                     );
                 }
+                let _timer = crate::performance::Timer::start("sqf.diagnostics");
                 for code in checked.codes {
                     let Some(diag) = code.diagnostic() else {
                         continue;
@@ -177,23 +176,14 @@ async fn check_sqf(
             err_sources
         }
     };
-    for (file, diags) in lsp_diags {
-        manager.set_current(
-            format!("sqf:{}", source.as_str()),
-            &workspace.to_url(&file),
-            diags,
-        );
-    }
-    let cache = Cache::get();
-    if sources.is_empty() {
-        cache.files.write().await.remove(&source);
-    } else {
-        cache
-            .files
-            .write()
-            .await
-            .insert(source.clone(), CacheBundle { sources });
-    }
+    manager.replace_scope(
+        format!("sqf:{}", workspace.to_url(&source)),
+        lsp_diags
+            .into_iter()
+            .map(|(file, diagnostics)| (workspace.to_url(&file), diagnostics))
+            .collect(),
+    );
+    Cache::get().files.write().await.replace(source, sources);
 }
 
 impl SqfAnalyzer {
@@ -223,27 +213,10 @@ impl SqfAnalyzer {
         };
         let project_change = url.as_str().contains(".toml");
         let recheck_files = {
+            let _timer = crate::performance::Timer::start("sqf.dependencies");
             let cache = Cache::get();
             let files = cache.files.read().await;
-            let mut recheck = files
-                .iter()
-                .filter_map(|(path, bundle)| {
-                    if project_change {
-                        return Some(path.clone());
-                    }
-                    if path == &saved
-                        || bundle.sources.iter().any(|source| {
-                            workspace
-                                .join_url(&url)
-                                .is_ok_and(|joined| joined == *source)
-                        })
-                    {
-                        Some(path.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
+            let mut recheck = files.affected(&saved, project_change);
             drop(files);
             // `saved` is its own compilation unit, so it is always rechecked
             // directly, even when it isn't yet a known cache key - a new file,

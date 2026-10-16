@@ -107,3 +107,25 @@ Run `cargo test -p hemtt-language-server -p hemtt-workspace -p hemtt-preprocesso
 -p hemtt-sqf --locked` locally. On hosts inheriting `NO_COLOR`, clear it for
 snapshot tests. The client has additional real-LSP and packaged VS Code tests.
 Editor integration tests are static tooling tests, not native-engine evidence.
+
+## Local performance work (2026-10-16)
+
+The language server indexes reverse include consumers and replaces each
+compilation unit's diagnostic scope atomically. It publishes only changed file
+sets, retaining other config/SQF consumer findings and explicit repair clears.
+Project changes recheck only the owning workspace. Failed preprocessing keeps
+its dependency edges so header repairs are still analyzed.
+
+The shared lint manager prepares enabled runners and effective configurations
+once per compilation unit instead of allocating them for every AST node. The
+same implementation is used by CLI and HLS; no lint or diagnostic category is
+removed. Project configuration is read once per check, so subsequent checks
+still observe configuration changes without a persistent stale config cache.
+
+Set `HEMTT_PROFILE=1` before starting HLS and request `hemtt/performance` for
+aggregate phase counts/times (no source contents). Disabled by default. Timers
+include parallel work, lock waits and nested phases; their totals are not wall
+time or process CPU. The LYL extension's `test/performance.js` drives a repeatable
+real-repository workload, captures a Node CPU profile and process CPU/memory,
+and checks dirty edits, shared headers, command hovers and context analysis.
+Use its inventory comparator to ensure speed changes retain all findings.
