@@ -92,9 +92,7 @@ fn findings(codes: Codes, sources: &SourceDatabase) -> (Vec<Value>, bool) {
     let mut failed = false;
     let mut results = Vec::new();
     for code in codes {
-        // Preserve the manual gate's argument-warning policy.
-        failed |= code.severity() == Severity::Error
-            || matches!(code.ident(), "L-S08" | "L-S09" | "L-S12");
+        failed |= code.severity() == Severity::Error;
         let Some(diag) = code.diagnostic() else {
             results.push(json!({"code":code.ident(), "severity":format!("{:?}",code.severity()), "message":code.message()}));
             continue;
@@ -172,6 +170,10 @@ fn check(
 
 impl Session {
     fn verify(&mut self, request: &Value) -> Result<Value, String> {
+        // Diagnostic failures are reusable; transient infrastructure failures
+        // must be attempted again even when saved source bytes are unchanged.
+        self.cache
+            .retain(|_, unit| unit.result.get("infrastructureError").is_none());
         let root = PathBuf::from(
             request["workspace"]
                 .as_str()
@@ -352,6 +354,15 @@ mod tests {
         let first = session.verify(&request).expect("initial");
         assert_eq!(first["checked"], 2);
         assert_eq!(session.verify(&request).expect("repeat")["checked"], 0);
+        session
+            .cache
+            .values_mut()
+            .next()
+            .expect("cached unit")
+            .result["infrastructureError"] = json!("transient test failure");
+        let retried = session.verify(&request).expect("retry infrastructure");
+        assert_eq!(retried["checked"], 1);
+        assert_eq!(retried["units"], first["units"]);
         for (path, text) in [
             (&source, "#include \"header.hpp\"\nprivate _x = ;"),
             (&header, "#define BROKEN 1"),

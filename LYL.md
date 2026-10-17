@@ -284,7 +284,7 @@ sort lexically instead of selecting nondeterministic candidates from hash maps.
 `HEMTT_PROFILE=1` enables aggregate preprocessing, lexing, grammar, inspection
 and lint timers; ordinary analysis leaves profiling off.
 
-Three alternating reference/optimized runs took median 8.254/4.670 seconds with
+Three alternating reference/optimized runs took median 8.306/4.726 seconds with
 identical complete findings and unchanged source hashes. This is the narrower
 valid-config compiler workload, not a passing production repository or native
 Arma test. The consuming adapter retains its failed CLI configuration gate and
