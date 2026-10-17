@@ -34,6 +34,7 @@ mod preprocessor;
 mod rpt;
 mod sources;
 mod sqf;
+mod verification;
 mod workspace;
 
 #[derive(Clone, clap::Args)]
@@ -357,6 +358,10 @@ pub enum TextInformation<'a> {
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--verify-stdio") {
+        verification::serve();
+        return;
+    }
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_max_level(Level::DEBUG)

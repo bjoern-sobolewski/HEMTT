@@ -73,8 +73,13 @@ pub fn check_with_sources(
 ) -> Checked {
     // Preprocessor warnings belong to the file as much as lint codes do
     let mut codes: Codes = processed.warnings().to_vec();
-    match crate::parser::run(&database, processed) {
+    let parsed = {
+        let _timer = hemtt_common::performance::Timer::start("compiler.sqf.parse");
+        crate::parser::run(&database, processed)
+    };
+    match parsed {
         Ok(statements) => {
+            let _timer = hemtt_common::performance::Timer::start("compiler.sqf.analyze");
             let (lints, report) = analyze(
                 &statements,
                 project,

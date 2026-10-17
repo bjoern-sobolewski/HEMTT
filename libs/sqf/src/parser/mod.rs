@@ -22,6 +22,7 @@ use hemtt_workspace::reporting::{Code, Processed};
 /// [`ParserError::LexingError`] if the input string contains invalid tokens.
 /// [`ParserError::ParsingError`] if the input string contains invalid syntax.
 pub fn run(database: &Database, processed: &Processed) -> Result<Statements, ParserError> {
+    let lexer_timer = hemtt_common::performance::Timer::start("compiler.sqf.lex");
     let mut tokens = self::lexer::run(processed.as_str()).map_err(|e| {
         let mut errors: Vec<Arc<dyn Code>> = Vec::new();
         for e in e {
@@ -32,8 +33,10 @@ pub fn run(database: &Database, processed: &Processed) -> Result<Statements, Par
         }
         ParserError::LexingError(errors)
     })?;
+    drop(lexer_timer);
     self::lexer::strip_comments(&mut tokens);
     self::lexer::strip_noop(&mut tokens);
+    let parser_timer = hemtt_common::performance::Timer::start("compiler.sqf.grammar");
     let mut statements = run_for_tokens(database, processed, tokens).map_err(|e| {
         let mut errors: Vec<Arc<dyn Code>> = Vec::new();
         for e in e {
@@ -44,7 +47,9 @@ pub fn run(database: &Database, processed: &Processed) -> Result<Statements, Par
         }
         ParserError::ParsingError(errors)
     })?;
+    drop(parser_timer);
     statements.source = processed.as_str().into();
+    let _inspector_timer = hemtt_common::performance::Timer::start("compiler.sqf.inspect");
     statements.issues = inspector::run_processed(&statements, processed, database);
     Ok(statements)
 }

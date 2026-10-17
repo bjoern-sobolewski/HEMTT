@@ -57,6 +57,7 @@ pub fn analyze(
     let manager: Arc<LintManager<LintData>> = if let Some(manager) = manager {
         manager
     } else {
+        let _timer = hemtt_common::performance::Timer::start("compiler.sqf.prepare_lints");
         match create_lint_manager(project) {
             Ok(manager) => Arc::new(manager),
             Err(codes) => return (codes, None),

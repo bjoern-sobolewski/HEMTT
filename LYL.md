@@ -256,3 +256,37 @@ validation. Separate real-HLS and historical SQF performance workloads cover
 additional SQF analysis; their precise scopes/results belong in the consuming
 maintenance report. Original/staged sources and game archive hashes are retained
 locally. This update adds no native-engine or multiplayer execution evidence.
+
+
+## Saved-source analysis and compiler performance (v1.22.1-lyl.3)
+
+The language-server binary also supports `--verify-stdio`: serialized JSON-line
+requests with an absolute `workspace` and optional `reset` return a complete
+SQF/config diagnostic inventory and explicit checked/reused/completed counts.
+It checks config and SQF units independently; config errors never hide SQF
+analysis. Infrastructure failures remain incomplete. This saved-source session
+is separate from dirty editor buffers. No SQF is executed.
+
+Every request compares source bytes, including missing/new include paths through
+inventory changes. Source edits invalidate their units and recorded consumers;
+header, project, rule, command metadata and file inventory changes conservatively
+rebuild all units. Both snapshot boundaries must match. Processes expire under
+the consumer's lifetime policy; no persistent on-disk result cache is trusted.
+
+Profiling on the consuming project's valid 1,833-SQF/four-config frozen workload
+identified lexing as the largest measured parser subphase. Common token dispatch
+retains the original lexer for malformed/unusual input; UTF-8 character spans,
+quoted delimiters, numeric forms and every diagnostic remain covered by a
+12,000-case differential test and existing parser/native-compatibility fixtures.
+`HEMTT_REFERENCE_LEXER=1` selects the retained reference implementation for
+sequential comparisons using the same binary. Tied spelling suggestions now
+sort lexically instead of selecting nondeterministic candidates from hash maps.
+`HEMTT_PROFILE=1` enables aggregate preprocessing, lexing, grammar, inspection
+and lint timers; ordinary analysis leaves profiling off.
+
+Three alternating reference/optimized runs took median 8.254/4.670 seconds with
+identical complete findings and unchanged source hashes. This is the narrower
+valid-config compiler workload, not a passing production repository or native
+Arma test. The consuming adapter retains its failed CLI configuration gate and
+adds complete SQF/config analysis alongside it. See the matching editor's
+PERFORMANCE.md for final end-to-end measurements and limitations.

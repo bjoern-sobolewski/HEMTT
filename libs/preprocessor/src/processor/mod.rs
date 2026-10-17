@@ -131,6 +131,7 @@ impl Processor {
         options: &PreprocessorOptions,
         sources: &SourceDatabase,
     ) -> Result<Processed, (Vec<WorkspacePath>, Error)> {
+        let _timer = hemtt_common::performance::Timer::start("compiler.preprocess");
         Self::run_mode(path, options, sources, false).map(|(processed, _)| processed)
     }
 
@@ -171,9 +172,13 @@ impl Processor {
         let root_id = processor.sources.file_id(path);
         processor.sources.clear_dependencies_of(root_id);
 
+        let tokenize_timer =
+            hemtt_common::performance::Timer::start("compiler.preprocess.tokenize");
         let tokens = crate::parse::file_with_sources(path, &processor.sources)
             .map_err(|e| (processor.included_files.clone(), e))?;
+        drop(tokenize_timer);
         let mut pragma = Pragma::root();
+        let walk_timer = hemtt_common::performance::Timer::start("compiler.preprocess.expand");
         let mut buffer = Vec::with_capacity(tokens.len());
         let mut stream = tokens.iter().cloned().peekmore();
 
@@ -194,6 +199,8 @@ impl Processor {
                 .push(Arc::new(InvalidConfigCase::new(path.clone())));
         }
 
+        drop(walk_timer);
+        let _output_timer = hemtt_common::performance::Timer::start("compiler.preprocess.output");
         let mut processed = Processed::new(
             buffer,
             processor.macros,

@@ -17,6 +17,7 @@ git2 = { workspace = true }
 regex = { workspace = true }
 rustversion = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 steamlocate = "2.1.0"
 strsim = { workspace = true }
 thiserror = { workspace = true }
