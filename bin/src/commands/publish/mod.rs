@@ -32,7 +32,7 @@ const APP_ID: steamworks::AppId = steamworks::AppId(107_410);
 /// The `meta.cpp` file stores your Steam Workshop published item ID. It must be located
 /// in the root of your project (where you run `hemtt publish`).
 ///
-/// ```
+/// ```cpp
 /// protocol = 1;
 /// publishedid = 1234567890;
 /// ```
