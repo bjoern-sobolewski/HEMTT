@@ -3,7 +3,8 @@
 Repository: https://github.com/bjoern-sobolewski/HEMTT
 
 The `lyl-compat` branch merges upstream `main` without rewriting published
-history. Release `v1.22.1-lyl.1` includes upstream
+history. Release `v1.22.1-lyl.2` adds the PBO extraction security fix below.
+Release `v1.22.1-lyl.1` includes upstream
 `b888164616dbaf1007400485be4e4ee2b3521818` and the completed `v1.22.0-lyl.6`
 compatibility/editor baseline. Keep the upstream remote and carry focused generic
 compatibility patches; project rules belong in the consuming adapter.
@@ -94,6 +95,30 @@ Do not put mission code, game headers or private game data into this public fork
 Keep upstream copyright/license files with distributed binaries. Future updates
 should merge upstream deliberately and rerun both upstream tests and the
 LiveYourLife worklist, preserving failures as failures.
+
+## PBO extraction security (v1.22.1-lyl.2)
+
+`utils pbo unpack` validates every archive entry before creating output. It
+rejects traversal, rooted/drive/UNC paths, Windows alternate streams and device
+names, and ambiguous trailing dots/spaces on every host. Extraction requires a
+new output directory, rejects directory symlinks/junctions/reparse points, and
+creates files exclusively. Archive entries cannot overwrite existing files,
+generated metadata or `--derap` output. Both PBO separator styles remain supported.
+The generic PBO reader still preserves archive names; the filesystem policy lives
+in the unpack command. These checks do not sandbox a hostile local process that
+concurrently changes filesystem paths.
+
+Regressions in `bin/src/utils/pbo/unpack.rs` cover unsafe paths, preservation of
+outside files, ordinary files/properties, derapification collisions, hard links
+and directory links (a real junction on Windows). Run locally with Rust 1.99.1:
+`cargo test -p hemtt -p hemtt-pbo --lib --tests --locked -- --nocapture --test-threads=1`.
+This is filesystem/static tooling evidence. Consumers must use the immutable
+`v1.22.1-lyl.2` release with matching source/archive/executable checksum pins;
+prior release assets are retained and remain affected by this extraction issue.
+
+Local Windows validation: all 23 CLI/PBO unit/integration tests pass, including
+nine extraction-security regressions. Formatting and diff whitespace checks pass.
+
 # Editor integration
 
 The LYL VS Code client is maintained in the separate public
