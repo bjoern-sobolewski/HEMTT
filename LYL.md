@@ -290,3 +290,28 @@ valid-config compiler workload, not a passing production repository or native
 Arma test. The consuming adapter retains its failed CLI configuration gate and
 adds complete SQF/config analysis alongside it. See the matching editor's
 PERFORMANCE.md for final end-to-end measurements and limitations.
+
+## Saved-source header invalidation (v1.22.1-lyl.4)
+
+Existing SQF/header edits now invalidate their recorded transitive compilation
+units, including failed preprocessing consumers. File creation/deletion, project
+configuration, command metadata and rule changes still reset the session. Raw
+preprocessor tokens for unchanged files survive requests; changed files discard
+their tokens by content inventory, without trusting timestamps. Each effective
+VFS source is loaded once at the request boundary and reused during that request.
+The complete before/after byte inventories remain authoritative. Invalid source
+reads clear any prior saved overlay and cannot turn into a cached success.
+
+The consuming adapter separately retains context results, parser results and
+prepared source aliases. It tracks literal include trees across physical overlays
+and missing paths; uncertain macro includes conservatively disable reuse. Header
+edits continue to check all affected consumers. Equal preprocessed text alone is
+not a sufficient lint key: source pragmas, mappings and macro metadata also affect
+findings. No lint or compiler stage is removed to meet a timing target.
+
+Regressions compare incremental and independent fresh inventories after transitive
+header/macro edits, BOM failures, missing-include repairs, configuration changes
+and transient infrastructure errors. Matching editor/launcher measurements and
+remaining latency limits are recorded by the consuming adapter. Five seconds is
+a measured workload target, not a general latency guarantee. Commit hooks remain
+disabled in the consumer; this release adds no native Arma/multiplayer evidence.

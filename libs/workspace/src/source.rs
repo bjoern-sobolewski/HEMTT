@@ -330,6 +330,24 @@ impl SourceDatabase {
             }
         }
     }
+
+    /// Discard raw tokens for saved files whose bytes changed at a serialized
+    /// analysis boundary. Unchanged header tokens remain reusable; callers must
+    /// establish changes by content, not timestamps or filesystem events alone.
+    /// # Panics
+    /// Panics if the source database lock is poisoned.
+    pub fn invalidate_matching(&self, changed: impl Fn(&WorkspacePath) -> bool) {
+        let mut inner = self.inner.write().expect("SourceDatabase lock poisoned");
+        let ids: Vec<_> = inner
+            .paths
+            .iter()
+            .filter(|(_, path)| changed(path))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            inner.tokens.remove(&id);
+        }
+    }
 }
 
 #[cfg(test)]

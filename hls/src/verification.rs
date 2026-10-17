@@ -28,6 +28,7 @@ struct Session {
     database: Option<Arc<hemtt_sqf::parser::database::Database>>,
     workspace: Option<EditorWorkspace>,
     sources: SourceDatabase,
+    revision: u64,
 }
 
 #[derive(Clone)]
@@ -190,7 +191,11 @@ impl Session {
         let reset = self.root != root
             || request["reset"].as_bool().unwrap_or(false)
             || self.inputs.keys().ne(before.keys())
-            || changed.iter().any(|p| !p.ends_with(".sqf"));
+            || changed.iter().any(|p| {
+                ![".sqf", ".hpp", ".h", ".inc"]
+                    .iter()
+                    .any(|extension| p.to_ascii_lowercase().ends_with(extension))
+            });
         if reset {
             self.cache.clear();
             self.database = None;
@@ -198,16 +203,22 @@ impl Session {
         } else if !changed.is_empty() {
             self.cache.retain(|path, unit| {
                 !changed.iter().any(|p| {
-                    path.trim_start_matches('/') == p
+                    path.trim_start_matches('/').eq_ignore_ascii_case(p)
                         || unit
                             .dependencies
                             .iter()
-                            .any(|d| d.trim_start_matches('/') == p)
+                            .any(|d| d.trim_start_matches('/').eq_ignore_ascii_case(p))
                 })
             });
         }
-        if reset || !changed.is_empty() {
+        if reset {
             self.sources = SourceDatabase::new();
+        } else {
+            self.sources.invalidate_matching(|path| {
+                changed
+                    .iter()
+                    .any(|p| dependency_key(path).eq_ignore_ascii_case(p))
+            });
         }
         if self.workspace.is_none() {
             self.workspace = Some(
@@ -219,6 +230,28 @@ impl Session {
             );
         }
         let workspace = self.workspace.as_ref().ok_or("Missing workspace")?;
+        // Pin each effective saved source once at this serialized request
+        // boundary. Includes otherwise reread the same disk header for every
+        // consumer even when its raw tokens are already memoized. VFS reads
+        // preserve layer precedence; the final content inventory remains the
+        // authority for both caching and completion.
+        self.revision += 1;
+        for name in if reset {
+            before.keys().collect::<Vec<_>>()
+        } else {
+            changed.iter().collect()
+        } {
+            let virtual_name = name.strip_prefix("include/").unwrap_or(name);
+            let path = workspace
+                .root()
+                .join(virtual_name)
+                .map_err(|e| e.to_string())?;
+            let id = self.sources.file_id(&path);
+            match path.read_to_string() {
+                Ok(content) => self.sources.set_overlay(id, content, self.revision),
+                Err(_) => self.sources.clear_overlay(id),
+            }
+        }
         // Invalid project/rule configuration is an infrastructure failure, never
         // silently defaulted. Config compilation failures do not stop SQF checks.
         let project = ProjectConfig::from_file(&root.join(".hemtt/project.toml"))
@@ -332,6 +365,66 @@ pub fn serve() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn edited_headers_recheck_transitive_consumers_and_preserve_unrelated_units() {
+        let root = std::env::temp_dir().join(format!("hemtt-header-cache-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(".hemtt")).expect("directory");
+        std::fs::create_dir_all(root.join("addons/test")).expect("addon");
+        for (name, text) in [
+            (
+                ".hemtt/project.toml",
+                "name='test'\nprefix='test'\n[version]\nmajor=1\nminor=0\npatch=0\n",
+            ),
+            ("addons/test/$PBOPREFIX$", "test"),
+            ("addons/test/config.cpp", "class CfgPatches {};"),
+            ("addons/test/a.sqf", "#include \"outer.hpp\"\nhint VALUE;"),
+            ("addons/test/b.sqf", "hint 'unrelated';"),
+            ("addons/test/outer.hpp", "#include \"inner.inc\""),
+            ("addons/test/inner.inc", "#define VALUE 'original'"),
+        ] {
+            std::fs::write(root.join(name), text).expect("fixture");
+        }
+        let request = json!({"workspace":root});
+        let mut session = Session::default();
+        assert_eq!(session.verify(&request).expect("initial")["checked"], 3);
+        for text in [
+            "#define VALUE 42",
+            "\u{feff}#define VALUE 'bad encoding'",
+            "#include \"missing.hpp\"",
+            "#define VALUE 'repaired'",
+        ] {
+            std::fs::write(root.join("addons/test/inner.inc"), text).expect("header edit");
+            let incremental = session.verify(&request).expect("incremental");
+            assert_eq!(incremental["checked"], 1);
+            assert_eq!(incremental["reused"], 2);
+            assert_eq!(
+                incremental["units"],
+                Session::default().verify(&request).expect("fresh")["units"]
+            );
+        }
+        std::fs::write(
+            root.join("addons/test/inner.inc"),
+            "#include \"missing.hpp\"",
+        )
+        .expect("missing include");
+        session.verify(&request).expect("missing");
+        std::fs::write(root.join("addons/test/missing.hpp"), "#define VALUE 'new'")
+            .expect("repair missing");
+        assert_eq!(
+            session.verify(&request).expect("new include")["units"],
+            Session::default().verify(&request).expect("fresh include")["units"]
+        );
+        std::fs::write(
+            root.join(".hemtt/project.toml"),
+            "name='changed'\nprefix='test'\n[version]\nmajor=1\nminor=0\npatch=0\n",
+        )
+        .expect("configuration");
+        assert_eq!(
+            session.verify(&request).expect("configuration reset")["checked"],
+            3
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
     #[test]
     fn content_cache_invalidates_sources_includes_configuration_and_inventory() {
         let root = std::env::temp_dir().join(format!("hemtt-verification-{}", std::process::id()));
