@@ -61,6 +61,54 @@ fn diagnostics(source: &str) -> hemtt_workspace::reporting::Codes {
     diagnostics_with_project(source, None)
 }
 
+#[test]
+fn params_accepts_a_default_outside_the_input_type_filter() {
+    for source in [
+        r#"[] params [["_value", 0, [""]]]; if (_value isEqualType 0) then {};"#,
+        r#"[] params [["_value", "", [[]]]]; if (_value isEqualType "") then {};"#,
+        r#"[] params [["_value", objNull, [0]]]; isNull _value;"#,
+    ] {
+        let codes = diagnostics(source);
+        assert!(!codes.iter().any(|c| c.ident() == "L-S12"), "{source}");
+    }
+    // The fallback type is still propagated into subsequent uses.
+    assert!(
+        diagnostics(r#"params [["_value", "sentinel", [0]]]; _value + true;"#)
+            .iter()
+            .any(|c| c.ident() == "L-S12")
+    );
+    // Malformed parameter schemas are still diagnosed.
+    assert!(
+        diagnostics(r#"params [["_value", 0, "wrong schema"]];"#)
+            .iter()
+            .any(|c| c.ident() == "L-S12")
+    );
+}
+
+#[test]
+fn registering_callbacks_does_not_execute_their_global_assignments() {
+    let source = r#"
+        G_stop = {
+            if (!isNil "G_first") then {
+                removeMissionEventHandler ["Ended", G_first]; G_first = nil;
+            };
+            if (!isNil "G_second") then {
+                removeMissionEventHandler ["MPEnded", G_second]; G_second = nil;
+            };
+        };
+        G_first = addMissionEventHandler ["Ended", {call G_stop}];
+        G_second = addMissionEventHandler ["MPEnded", {call G_stop}];
+        removeMissionEventHandler ["Ended", G_first];
+    "#;
+    assert!(!diagnostics(source).iter().any(|c| c.ident() == "L-S12"));
+    // Invalid code inside a callback must still be checked.
+    assert!(
+        diagnostics(r#"addMissionEventHandler ["Ended", {player setFuel true}];"#)
+            .iter()
+            .any(|c| c.ident() == "L-S12")
+    );
+}
+
 fn diagnostics_with_project(
     source: &str,
     project: Option<&hemtt_common::config::ProjectConfig>,

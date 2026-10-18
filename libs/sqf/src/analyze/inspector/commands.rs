@@ -155,23 +155,9 @@ impl Inspector<'_> {
                 // ie: assume `params ["_z", ""]` is type string, but this is not guaranteed
                 if element.len() > 1 && !element[1].is_empty() {
                     let default_value = element[1][0].0.clone();
-                    // Verify that the default value matches one of the types
-                    if !(matches!(default_value, GameValue::Anything)
-                        || matches!(default_value, GameValue::Nothing(NilSource::ExplicitNil))
-                        || var_types.iter().any(|t| {
-                            matches!(t, GameValue::Anything) || t == &default_value.make_generic()
-                        }))
-                    {
-                        error_type = Some(InvalidArgs::DefaultDifferentType {
-                            expected: var_types.iter().cloned().collect(),
-                            found: vec![default_value.clone()],
-                            span: element[1][0].1.clone(),
-                            default: Some(
-                                (element[2].first().map_or_default(|(_, s)| s.clone()).start)
-                                    ..(element[2].last().map_or_default(|(_, s)| s.clone()).end),
-                            ),
-                        });
-                    }
+                    // The filter validates the input, not the fallback. Native
+                    // params permits a differently typed sentinel; propagate it
+                    // so subsequent operations are still checked against both.
                     var_types.insert(default_value);
                 }
                 self.var_assign(

@@ -122,6 +122,10 @@ impl Inspector<'_> {
             let Expression::Code(statements) = expression else {
                 continue;
             };
+            // Inspecting a registered/spawned callback is not executing it at
+            // this point. Its global writes must not change the registration
+            // caller's state or the inputs of the next independent callback.
+            let globals = self.vars_global.clone();
             self.scope_push(false);
             let stack_index = self.stack_push(Some(expression), false);
             if stack_index.is_some() {
@@ -138,6 +142,7 @@ impl Inspector<'_> {
                 let _ = self.stack_pop(stack_index);
             }
             self.scope_pop();
+            self.vars_global = globals;
         }
     }
     fn external_current_scope(

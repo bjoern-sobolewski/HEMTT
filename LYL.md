@@ -339,3 +339,19 @@ and transient infrastructure errors. Matching editor/launcher measurements and
 remaining latency limits are recorded by the consuming adapter. Five seconds is
 a measured workload target, not a general latency guarantee. Commit hooks remain
 disabled in the consumer; this release adds no native Arma/multiplayer evidence.
+
+
+## Native params fallbacks and callback state (v1.22.1-lyl.6)
+
+Native probes confirm that params expected types filter supplied input, while a
+differently typed default can act as a sentinel. Such defaults no longer produce
+a mismatch diagnostic; their types remain in subsequent analysis. Malformed
+parameter schemas and incompatible later operations remain diagnosed.
+
+Inspecting registered or spawned callback bodies no longer applies their global
+assignments to registration-time state or the next independent callback. The
+bodies are still inspected and invalid operations remain reported. Generic Rust
+regressions cover both behaviors and retained errors. Native probes, saved-source
+comparison, actual-HLS, packaged editor and sequential workload results are
+recorded by the consuming adapter; they do not establish general gameplay or
+player-client correctness.
