@@ -171,6 +171,30 @@ pub fn workspace_added(workspace: &EditorWorkspace, client: Client) {
     check_addons(workspace, client);
 }
 
+// Opening a rapifiable include must not invent a new compilation unit that the
+// project's addon settings explicitly exclude. Its consumers are still checked
+// through the reverse include index above. Loose folders retain standalone use.
+fn is_project_entry(workspace: &EditorWorkspace, source: &WorkspacePath) -> bool {
+    if workspace.config().is_none() {
+        return true;
+    }
+    match Addon::scan(workspace.root_disk()) {
+        Ok(addons) => addons.iter().any(|addon| {
+            match hemtt_config::files::checkable(workspace.root(), addon) {
+                Ok(files) => files.contains(source),
+                Err(error) => {
+                    warn!("failed to resolve config entry points: {error}");
+                    false
+                }
+            }
+        }),
+        Err(error) => {
+            warn!("failed to scan config addons: {error}");
+            false
+        }
+    }
+}
+
 pub async fn process(url: Url, client: Client) {
     let Some(workspace) = EditorWorkspaces::get().guess_workspace_retry(&url).await else {
         warn!("Failed to find workspace for {:?}", url);
@@ -190,6 +214,7 @@ pub async fn process(url: Url, client: Client) {
     if !recheck_addons.contains(&saved)
         && saved.exists().unwrap_or(false)
         && hemtt_config::files::can_rapify(&saved).unwrap_or(false)
+        && is_project_entry(&workspace, &saved)
     {
         recheck_addons.push(saved);
     }

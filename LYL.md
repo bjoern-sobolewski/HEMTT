@@ -20,6 +20,9 @@ The consuming adapter must analyze included config fragments through their
 parent entry points and separate config coverage from SQF findings. Unsupported
 __EXEC evaluation remains explicit; no project evaluator, guessed runtime
 value, command stub or blanket diagnostic suppression is introduced here.
+HLS also honors the project's addon config entry selection on open/change,
+so an excluded included `.cpp` is refreshed through consumers without becoming
+an independent compilation unit. Loose-folder standalone configs remain supported.
 
 Repository: https://github.com/bjoern-sobolewski/HEMTT
 
