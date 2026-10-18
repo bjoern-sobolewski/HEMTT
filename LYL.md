@@ -1,5 +1,26 @@
 # LiveYourLife HEMTT compatibility fork
 
+## Native diagnostic compatibility (v1.22.1-lyl.5)
+
+Arma 3 2.22.154089 accepts non-contiguous format indices: `%2` with two
+arguments selects the second argument. The format lint no longer diagnoses
+this supported behavior. Unused trailing arguments remain visible warnings;
+missing arguments and unescaped percent signs remain errors. Native execution
+confirmed that an unescaped percent changes the output, including SQL LIKE
+wildcards. Both format and formatText are covered by focused regressions.
+
+The Broken Commands wiki group for addPublicVariableEventHandler describes
+the alternative `[target, code]` overload. The ordinary String/Code overload
+now receives a deprecation warning instead of a broken-command error. The
+alternative overload remains an error, and explicit project bans still apply.
+Isolated native server/HC tests confirm ordinary-handler network delivery.
+This is not regular-player or production-feature verification.
+
+The consuming adapter must analyze included config fragments through their
+parent entry points and separate config coverage from SQF findings. Unsupported
+__EXEC evaluation remains explicit; no project evaluator, guessed runtime
+value, command stub or blanket diagnostic suppression is introduced here.
+
 Repository: https://github.com/bjoern-sobolewski/HEMTT
 
 The `lyl-compat` branch merges upstream `main` without rewriting published

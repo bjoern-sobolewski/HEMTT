@@ -1,0 +1,5 @@
+name = "Native overload regression"
+prefix = "test"
+
+[lints.sqf.banned_commands]
+options.banned = ["addPublicVariableEventHandler"]

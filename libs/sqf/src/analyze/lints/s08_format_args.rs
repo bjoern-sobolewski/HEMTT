@@ -97,11 +97,12 @@ impl LintRunner<LintData> for Runner {
     
         #[allow(clippy::option_if_let_else)]
         if let Some(problem) = get_format_problem(format, args.len() - 1) {
+            let severity = if problem.contains("unused args") { Severity::Warning } else { config.severity() };
             vec![Arc::new(CodeS08FormatArgs::new(
                 target.full_span(),
                 problem,
                 processed,
-                config.severity(),
+                severity,
             ))]
         } else {
             Vec::new()
@@ -149,16 +150,24 @@ fn get_format_problem(input: &str, extra_args: usize) -> Option<String> {
         Ordering::Greater => Some(format!(
             "format string: unused args [used \"%{max_index}\", passed {extra_args}]"
         )),
-        Ordering::Equal => {
-            if max_index > tokens.len() {
-                Some(format!(
-                    "format string: skipped tokens [used \"%{max_index}\", but only {} tokens]",
-                    tokens.len()
-                ))
-            } else {
-                None
-            }
-        }
+        // Tokens select arguments by index; they need not mention every earlier
+        // index. Arma 3 2.22: format ["%2", "unused", "two"] returns "two".
+        Ordering::Equal => None,
+    }
+}
+
+#[cfg(test)]
+mod native_format_tests {
+    use super::get_format_problem;
+
+    #[test]
+    fn indices_are_not_required_to_be_contiguous() {
+        assert_eq!(get_format_problem("%2", 2), None);
+        assert_eq!(get_format_problem("%3 %1 %3", 3), None);
+        assert_eq!(get_format_problem("%% %1", 1), None);
+        assert!(get_format_problem("%3", 2).unwrap().contains("undefined tokens"));
+        assert!(get_format_problem("%1", 2).unwrap().contains("unused args"));
+        assert!(get_format_problem("LIKE '%abc%' id=%1", 1).unwrap().contains("non-escaped"));
     }
 }
 

@@ -87,13 +87,26 @@ impl LintRunner<LintData> for Runner {
         let Some(wiki) = data.database.wiki().commands().get(command) else {
             return Vec::new();
         };
-        if wiki.groups().contains(&String::from("Broken Commands")) {
+        let explicitly_banned = matches!(config.option("banned"), Some(toml::Value::Array(banned))
+            if banned.iter().any(|i| i.as_str().is_some_and(|s| s.eq_ignore_ascii_case(command))));
+        // The wiki's Broken Commands group applies only to this command's
+        // alternative [target, code] overload. The ordinary String/Code form
+        // works in multiplayer. A project ban still applies to either overload.
+        let ordinary_public_variable_handler = command.eq_ignore_ascii_case("addPublicVariableEventHandler")
+            && matches!(target, Expression::BinaryCommand(_, _, rhs, _) if matches!(rhs.as_ref(), Expression::Code(..)));
+        if !explicitly_banned && ordinary_public_variable_handler {
+            return vec![Arc::new(CodeS09BannedCommand::new(
+                target.span(), command.to_string(), processed, Severity::Warning, true, true,
+            ))];
+        }
+        if !explicitly_banned && wiki.groups().contains(&String::from("Broken Commands")) {
             return vec![Arc::new(CodeS09BannedCommand::new(
                 target.span(),
                 command.to_string(),
                 processed,
                 config.severity(),
                 true,
+                false,
             ))];
         }
         if let Some(toml::Value::Array(banned)) = config.option("banned")
@@ -103,6 +116,7 @@ impl LintRunner<LintData> for Runner {
                     command.to_string(),
                     processed,
                     config.severity(),
+                    false,
                     false,
                 ))];
             }
@@ -115,6 +129,7 @@ pub struct CodeS09BannedCommand {
     span: Range<usize>,
     command: String,
     from_wiki: bool,
+    ordinary_public_variable_handler: bool,
 
     severity: Severity,
     diagnostic: Option<Diagnostic>,
@@ -134,7 +149,9 @@ impl Code for CodeS09BannedCommand {
     }
 
     fn message(&self) -> String {
-        if self.from_wiki {
+        if self.ordinary_public_variable_handler {
+            "`addPublicVariableEventHandler` is deprecated; its ordinary String/Code form works in multiplayer. Only the alternative [target, code] syntax is marked broken.".to_string()
+        } else if self.from_wiki {
             format!("`{}` is marked as a broken command on the wiki", self.command)
         } else {
             format!("`{}` is banned by the project", self.command)
@@ -142,7 +159,9 @@ impl Code for CodeS09BannedCommand {
     }
 
     fn label_message(&self) -> String {
-        if self.from_wiki {
+        if self.ordinary_public_variable_handler {
+            "deprecated command".to_string()
+        } else if self.from_wiki {
             "broken command".to_string()
         } else {
             "banned command".to_string()
@@ -156,7 +175,7 @@ impl Code for CodeS09BannedCommand {
 
 impl CodeS09BannedCommand {
     #[must_use]
-    pub fn new(span: Range<usize>, command: String, processed: &Processed, severity: Severity, from_wiki: bool) -> Self {
+    pub fn new(span: Range<usize>, command: String, processed: &Processed, severity: Severity, from_wiki: bool, ordinary_public_variable_handler: bool) -> Self {
         Self {
             span,
             command,
@@ -164,6 +183,7 @@ impl CodeS09BannedCommand {
             severity,
             diagnostic: None,
             from_wiki,
+            ordinary_public_variable_handler,
         }
         .generate_processed(processed)
     }
