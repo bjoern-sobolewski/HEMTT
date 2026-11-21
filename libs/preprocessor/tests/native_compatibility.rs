@@ -128,7 +128,7 @@ fn failed_include_remains_a_dependency_for_editor_repair() {
 }
 
 #[test]
-fn structural_projection_is_explicitly_provisional_and_validation_stays_strict() {
+fn config_exec_is_deferred_without_relaxing_preprocessing() {
     let workspace = Workspace::builder()
         .memory()
         .finish(None, false, &PDriveOption::Disallow)
@@ -136,7 +136,7 @@ fn structural_projection_is_explicitly_provisional_and_validation_stays_strict()
     let root = workspace.join("description.ext").unwrap();
     root.create_file().unwrap().write_all(b"#include \"header.hpp\"\nclass CfgFunctions { class TAG { class Group { file=PATH; class registered; }; }; };\n").unwrap();
     let header = workspace.join("header.hpp").unwrap();
-    header.create_file().unwrap().write_all(b"#define PATH \"functions\"\n__EXEC(_v = call { str (1 + 2) }; _q = \"a ) (\"; _s = 'it''s )';)\n").unwrap();
+    header.create_file().unwrap().write_all(b"#define PATH \"functions\"\n#if 0 == 1\n__EXEC(ignored\n#endif\n__EXEC(\n_v = call { str [(1 + 2)] }; _q = \"a ) (\"; _s = 'it''s )'; /* ] */\n) ;\n").unwrap();
     let sources = hemtt_workspace::SourceDatabase::new();
     let options = PreprocessorOptions::default();
     assert_eq!(
@@ -152,27 +152,54 @@ fn structural_projection_is_explicitly_provisional_and_validation_stays_strict()
     let (processed, skipped) =
         Processor::run_structure_with_sources(&root, &options, &sources).unwrap();
     assert_eq!(skipped.len(), 1);
-    assert_eq!(skipped[0].ident(), "PE25");
+    assert_eq!(skipped[0].ident(), "PN1");
     assert!(processed.as_str().contains("class registered;"));
     assert!(processed.as_str().contains("file=\"functions\""));
     assert!(!processed.as_str().contains("_v"));
+    let checked = Processor::run_config_with_sources(&root, &options, &sources).unwrap();
+    assert_eq!(checked.as_str(), processed.as_str());
+    assert!(checked.no_rapify());
+    assert_eq!(checked.warnings().len(), 1);
+    let deferred = &checked.warnings()[0];
+    assert_eq!(deferred.ident(), "PN1");
+    assert_eq!(
+        deferred.severity(),
+        hemtt_workspace::reporting::Severity::Note
+    );
+    assert_eq!(deferred.token().unwrap().position().path(), &header);
+    assert!(
+        checked
+            .as_str()
+            .trim_start()
+            .starts_with("class CfgFunctions")
+    );
     let id = sources.file_id(&header);
     sources.set_overlay(id, "#define PATH \"dirty\"\n__EXEC(_v=(1);)\n", 2);
     let (dirty, skipped) =
         Processor::run_structure_with_sources(&root, &options, &sources).unwrap();
     assert_eq!(skipped.len(), 1);
     assert!(dirty.as_str().contains("file=\"dirty\""));
-    sources.set_overlay(id, "#define BAD(a,b) a\n#define PATH BAD(1)\n", 3);
+    assert!(
+        Processor::run_config_with_sources(&root, &options, &sources)
+            .unwrap()
+            .as_str()
+            .contains("file=\"dirty\"")
+    );
+    sources.set_overlay(
+        id,
+        "__EXEC(_v = 1);\n#define BAD(a,b) a\n#define PATH BAD(1)\n",
+        3,
+    );
     let (unknown, skipped) =
         Processor::run_structure_with_sources(&root, &options, &sources).unwrap();
-    assert_eq!(skipped[0].ident(), "PE9");
+    assert_eq!(skipped[1].ident(), "PE9");
     assert!(
         unknown
             .as_str()
             .contains("file=__EVAL(HEMTT_UNRESOLVED_MACRO)")
     );
     assert_eq!(
-        Processor::run_with_sources(&root, &options, &sources)
+        Processor::run_config_with_sources(&root, &options, &sources)
             .err()
             .unwrap()
             .1
@@ -184,6 +211,7 @@ fn structural_projection_is_explicitly_provisional_and_validation_stays_strict()
     for (index, malformed) in [
         "__EXEC missing",
         "__EXEC((1)",
+        "__EXEC(call { [1, 2) ]; })",
         "__EXEC(\"unterminated)",
         "#define BAD(a,b) a\nBAD(1",
     ]
@@ -193,6 +221,10 @@ fn structural_projection_is_explicitly_provisional_and_validation_stays_strict()
         sources.set_overlay(id, malformed, 10 + index as u64);
         assert!(
             Processor::run_structure_with_sources(&root, &options, &sources).is_err(),
+            "{malformed}"
+        );
+        assert!(
+            Processor::run_config_with_sources(&root, &options, &sources).is_err(),
             "{malformed}"
         );
     }

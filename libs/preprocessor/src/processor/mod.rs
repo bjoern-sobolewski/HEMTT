@@ -16,9 +16,13 @@ use peekmore::{PeekMore, PeekMoreIterator};
 use crate::codes::pe3_expected_ident::ExpectedIdent;
 use crate::codes::pw2_invalid_config_case::InvalidConfigCase;
 use crate::codes::{
-    pe2_unexpected_eof::UnexpectedEOF, pe26_unsupported_builtin::BuiltInNotSupported,
+    pe1_unexpected_token::UnexpectedToken, pe2_unexpected_eof::UnexpectedEOF,
+    pe26_unsupported_builtin::BuiltInNotSupported,
 };
-use crate::codes::{pe18_eoi_ifstate::EoiIfState, pe25_exec::ExecNotSupported};
+use crate::codes::{
+    pe18_eoi_ifstate::EoiIfState,
+    pe25_exec::{ExecDeferred, ExecNotSupported},
+};
 use crate::defines::Defines;
 use crate::ifstate::IfStates;
 use crate::{Error, codes::pe29_circular_include::CircularInclude};
@@ -30,11 +34,18 @@ mod directives;
 pub mod pragma;
 mod whitespace;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Mode {
+    #[default]
+    Strict,
+    Config,
+    Structure,
+}
+
 #[derive(Default)]
 /// Arma 3 Preprocessor
 pub struct Processor {
-    /// Editor-only projection; never used for validation or rapification.
-    structure_only: bool,
+    mode: Mode,
     structural_limitations: Codes,
     ifstates: IfStates,
     defines: Defines,
@@ -132,13 +143,28 @@ impl Processor {
         sources: &SourceDatabase,
     ) -> Result<Processed, (Vec<WorkspacePath>, Error)> {
         let _timer = hemtt_common::performance::Timer::start("compiler.preprocess");
-        Self::run_mode(path, options, sources, false).map(|(processed, _)| processed)
+        Self::run_mode(path, options, sources, Mode::Strict).map(|(processed, _)| processed)
+    }
+
+    /// Preprocess a config for static analysis. A balanced `__EXEC` invocation
+    /// is deferred to Arma. The remaining config can be checked but must stay
+    /// as source text when packed, so Arma receives the original invocation.
+    ///
+    /// # Errors
+    /// See [`Error`]. Preprocessing errors still fail the check.
+    pub fn run_config_with_sources(
+        path: &WorkspacePath,
+        options: &PreprocessorOptions,
+        sources: &SourceDatabase,
+    ) -> Result<Processed, (Vec<WorkspacePath>, Error)> {
+        let _timer = hemtt_common::performance::Timer::start("compiler.preprocess");
+        Self::run_mode(path, options, sources, Mode::Config).map(|(processed, _)| processed)
     }
 
     /// Project literal config structure without executing `__EXEC` bodies.
     /// Every skipped body is returned as an explicit limitation. Consumers must
     /// treat the entire result as provisional: side effects and `__EVAL`
-    /// results are unknown. Normal preprocessing remains strict.
+    /// results are unknown. This mode is only for editor discovery.
     ///
     /// # Errors
     /// See [`Error`]. Malformed/unclosed bodies are never recovered.
@@ -147,18 +173,18 @@ impl Processor {
         options: &PreprocessorOptions,
         sources: &SourceDatabase,
     ) -> Result<(Processed, Codes), (Vec<WorkspacePath>, Error)> {
-        Self::run_mode(path, options, sources, true)
+        Self::run_mode(path, options, sources, Mode::Structure)
     }
 
     fn run_mode(
         path: &WorkspacePath,
         options: &PreprocessorOptions,
         sources: &SourceDatabase,
-        structure_only: bool,
+        mode: Mode,
     ) -> Result<(Processed, Codes), (Vec<WorkspacePath>, Error)> {
         let mut processor = Self {
             sources: sources.clone(),
-            structure_only,
+            mode,
             ..Self::default()
         };
 
@@ -273,11 +299,12 @@ impl Processor {
             match (token.symbol(), in_quotes) {
                 (Symbol::Word(w), false) => {
                     if w == "__EXEC" {
-                        if self.structure_only {
-                            self.skip_exec(stream)?;
-                            continue;
+                        if self.mode == Mode::Strict {
+                            return Err(ExecNotSupported::code((**token).clone()));
                         }
-                        return Err(ExecNotSupported::code((**token).clone()));
+                        self.skip_exec(stream, buffer)?;
+                        just_whitespace = false;
+                        continue;
                     }
                     if Defines::is_unsupported_builtin(w) {
                         return Err(BuiltInNotSupported::code((**token).clone()));
@@ -365,46 +392,92 @@ impl Processor {
     fn skip_exec(
         &mut self,
         stream: &mut PeekMoreIterator<impl Iterator<Item = Arc<Token>>>,
+        buffer: &mut Vec<Output>,
     ) -> Result<(), Error> {
         let start = stream.next().expect("peeked __EXEC");
-        while stream
-            .peek()
-            .is_some_and(|token| token.symbol().is_whitespace() || token.symbol().is_newline())
-        {
-            stream.next();
+        let incomplete = || UnexpectedEOF::code((*start).clone());
+        let opening = stream
+            .by_ref()
+            .find(|token| {
+                let symbol = token.symbol();
+                !(symbol.is_whitespace() || symbol.is_comment() || symbol.is_newline())
+            })
+            .filter(|token| !token.symbol().is_eoi())
+            .ok_or_else(incomplete)?;
+        if !opening.symbol().is_left_paren() {
+            return Err(UnexpectedToken::code(
+                (*opening).clone(),
+                vec!["(".to_string()],
+                Some("opening delimiter for __EXEC".to_string()),
+            ));
         }
-        if !stream
-            .peek()
-            .is_some_and(|token| token.symbol().is_left_paren())
-        {
-            return Err(ExecNotSupported::code((*start).clone()));
-        }
-        let mut depth = 0;
-        let mut quote: Option<Symbol> = None;
-        for token in stream {
-            match token.symbol() {
-                Symbol::Eoi => break,
-                Symbol::DoubleQuote | Symbol::SingleQuote => {
-                    if quote.as_ref() == Some(token.symbol()) {
-                        quote = None;
-                    } else if quote.is_none() {
-                        quote = Some(token.symbol().clone());
-                    }
+        let mut closers = vec![")"];
+        let mut quote = None;
+        for token in stream.by_ref() {
+            let symbol = token.symbol();
+            if symbol.is_eoi() {
+                break;
+            }
+            if let Some(open_quote) = &quote {
+                if open_quote == symbol {
+                    quote = None;
                 }
-                Symbol::LeftParenthesis if quote.is_none() => depth += 1,
-                Symbol::RightParenthesis if quote.is_none() => {
-                    depth -= 1;
-                    if depth == 0 {
-                        self.structural_limitations
-                            .push(Arc::new(ExecNotSupported::new(Box::new((*start).clone()))));
-                        self.no_rapify = true;
-                        return Ok(());
+                continue;
+            }
+            let delimiter = match symbol {
+                Symbol::DoubleQuote | Symbol::SingleQuote => {
+                    quote = Some(symbol.clone());
+                    continue;
+                }
+                Symbol::LeftParenthesis => "(",
+                Symbol::RightParenthesis => ")",
+                // The preprocessor lexer leaves other SQF punctuation as text.
+                Symbol::Unicode(text) => text.as_str(),
+                _ => continue,
+            };
+            match delimiter {
+                "{" => closers.push("}"),
+                "[" => closers.push("]"),
+                "(" => closers.push(")"),
+                "}" | "]" | ")" => {
+                    let expected = closers.pop().expect("outer __EXEC parentheses");
+                    if delimiter != expected {
+                        return Err(UnexpectedToken::code(
+                            (*token).clone(),
+                            vec![expected.to_string()],
+                            Some("closing delimiter for __EXEC".to_string()),
+                        ));
+                    }
+                    if closers.is_empty() {
+                        break;
                     }
                 }
                 _ => {}
             }
         }
-        Err(ExecNotSupported::code((*start).clone()))
+        if !closers.is_empty() {
+            return Err(incomplete());
+        }
+
+        // The invocation is a statement. Its optional same-line semicolon
+        // belongs to __EXEC and would be a stray config semicolon by itself.
+        while stream
+            .peek()
+            .is_some_and(|token| token.symbol().is_whitespace() || token.symbol().is_comment())
+        {
+            self.output(stream.next().expect("peeked trivia"), buffer);
+        }
+        let _ =
+            stream.next_if(|token| matches!(token.symbol(), Symbol::Unicode(text) if text == ";"));
+
+        let deferred = Arc::new(ExecDeferred::new(Box::new((*start).clone())));
+        if self.mode == Mode::Structure {
+            self.structural_limitations.push(deferred);
+        } else {
+            self.warnings.push(deferred);
+        }
+        self.no_rapify = true;
+        Ok(())
     }
 
     /// Returns the current word, consuming it from the stream

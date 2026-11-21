@@ -114,54 +114,61 @@ fn check(
     sources: &SourceDatabase,
 ) -> Unit {
     let sqf = hemtt_sqf::is_compilation_unit(path);
-    let (codes, dependencies, preprocessed, parsed) =
-        match hemtt_preprocessor::Processor::run_with_sources(path, project.preprocessor(), sources)
-        {
-            Ok(processed) => {
-                let dependencies = processed
-                    .included_files()
-                    .iter()
-                    .map(dependency_key)
-                    .collect();
-                if sqf {
-                    let checked = hemtt_sqf::check::check_with_sources(
-                        &processed,
-                        Some(project),
-                        addon,
-                        path,
-                        database.clone(),
-                        None,
-                        sources,
-                    );
-                    (
-                        checked.codes,
-                        dependencies,
-                        true,
-                        checked.statements.is_some(),
-                    )
-                } else {
-                    let checked = hemtt_config::check::check_with_sources(
-                        &processed,
-                        Some(project),
-                        path,
-                        sources,
-                    );
-                    (checked.codes, dependencies, true, checked.config.is_some())
-                }
+    let preprocess = if sqf {
+        hemtt_preprocessor::Processor::run_with_sources
+    } else {
+        hemtt_preprocessor::Processor::run_config_with_sources
+    };
+    let (codes, dependencies, preprocessed, parsed) = match preprocess(
+        path,
+        project.preprocessor(),
+        sources,
+    ) {
+        Ok(processed) => {
+            let dependencies = processed
+                .included_files()
+                .iter()
+                .map(dependency_key)
+                .collect();
+            if sqf {
+                let checked = hemtt_sqf::check::check_with_sources(
+                    &processed,
+                    Some(project),
+                    addon,
+                    path,
+                    database.clone(),
+                    None,
+                    sources,
+                );
+                (
+                    checked.codes,
+                    dependencies,
+                    true,
+                    checked.statements.is_some(),
+                )
+            } else {
+                let checked = hemtt_config::check::check_with_sources(
+                    &processed,
+                    Some(project),
+                    path,
+                    sources,
+                );
+                (checked.codes, dependencies, true, checked.config.is_some())
             }
-            Err((dependencies, hemtt_preprocessor::Error::Code(code))) => (
-                vec![code],
-                dependencies.iter().map(dependency_key).collect(),
-                false,
-                false,
-            ),
-            Err((_, error)) => {
-                return Unit {
-                    result: json!({"path":path.as_str(),"kind":if sqf {"sqf"} else {"config"},"infrastructureError":error.to_string()}),
-                    dependencies: Vec::new(),
-                };
-            }
-        };
+        }
+        Err((dependencies, hemtt_preprocessor::Error::Code(code))) => (
+            vec![code],
+            dependencies.iter().map(dependency_key).collect(),
+            false,
+            false,
+        ),
+        Err((_, error)) => {
+            return Unit {
+                result: json!({"path":path.as_str(),"kind":if sqf {"sqf"} else {"config"},"infrastructureError":error.to_string()}),
+                dependencies: Vec::new(),
+            };
+        }
+    };
     let (diagnostics, failed) = findings(codes, sources);
     Unit {
         result: json!({"path":path.as_str(),"kind":if sqf {"sqf"} else {"config"},"preprocessed":preprocessed,"parsed":parsed,"failed":failed,"diagnostics":diagnostics}),

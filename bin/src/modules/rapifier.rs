@@ -81,7 +81,7 @@ impl Module for Rapifier {
 
 pub fn rapify(addon: &Addon, path: &WorkspacePath, ctx: &Context) -> Result<Report, Error> {
     let mut report = Report::new();
-    let processed = match hemtt_preprocessor::Processor::run_with_sources(
+    let processed = match hemtt_preprocessor::Processor::run_config_with_sources(
         path,
         ctx.config().preprocessor(),
         ctx.sources(),

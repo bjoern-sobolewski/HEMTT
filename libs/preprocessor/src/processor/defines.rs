@@ -233,7 +233,7 @@ impl Processor {
                         args.len(),
                         &self.defines.clone(),
                     );
-                    if self.structure_only {
+                    if self.mode == super::Mode::Structure {
                         // An opaque expression, never a fabricated literal or
                         // a new accepted macro signature. Its original PE9 is
                         // retained and the entire projection is provisional.

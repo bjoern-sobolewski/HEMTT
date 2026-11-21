@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use hemtt_workspace::reporting::{Code, Token};
+use hemtt_workspace::reporting::{Code, Severity, Token};
 
 use crate::Error;
 
@@ -34,5 +34,35 @@ impl ExecNotSupported {
     #[must_use]
     pub fn code(token: Token) -> Error {
         Error::Code(Arc::new(Self::new(Box::new(token))))
+    }
+}
+
+/// The config can be checked statically, but the invocation executes in Arma.
+pub struct ExecDeferred {
+    token: Box<Token>,
+}
+
+impl Code for ExecDeferred {
+    fn ident(&self) -> &'static str {
+        "PN1"
+    }
+
+    fn token(&self) -> Option<&Token> {
+        Some(&self.token)
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Note
+    }
+
+    fn message(&self) -> String {
+        "__EXEC is deferred to Arma; its effects were not checked".to_string()
+    }
+}
+
+impl ExecDeferred {
+    #[must_use]
+    pub const fn new(token: Box<Token>) -> Self {
+        Self { token }
     }
 }

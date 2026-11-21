@@ -17,9 +17,7 @@ Isolated native server/HC tests confirm ordinary-handler network delivery.
 This is not regular-player or production-feature verification.
 
 The consuming adapter must analyze included config fragments through their
-parent entry points and separate config coverage from SQF findings. Unsupported
-__EXEC evaluation remains explicit; no project evaluator, guessed runtime
-value, command stub or blanket diagnostic suppression is introduced here.
+parent entry points and separate config coverage from SQF findings.
 HLS also honors the project's addon config entry selection on open/change,
 so an excluded included `.cpp` is refreshed through consumers without becoming
 an independent compilation unit. Loose-folder standalone configs remain supported.
@@ -176,9 +174,8 @@ returned with explicit provisional findings, so unrelated config lint errors
 cannot silently erase all discoverable registrations. The structural request
 also balances and skips `__EXEC(...)` bodies without expanding or executing them.
 Each skipped body makes the entire index provisional: side effects and dependent
-expression values remain unknown. Unbalanced bodies still fail. Ordinary
-preprocessing, diagnostics, verification and packaging retain their strict PE25
-failure; the structural projection must never be used as validation output.
+expression values remain unknown. Unbalanced bodies still fail. Structural
+projection is editor navigation data and cannot validate a config.
 Macro calls with incorrect argument counts retain PE9 and become opaque,
 nonliteral expressions only in the structural projection. This does not accept a
 new macro signature, infer a value or execute code. An unclosed macro invocation
@@ -204,6 +201,19 @@ Run `cargo test -p hemtt-language-server -p hemtt-workspace -p hemtt-preprocesso
 -p hemtt-sqf --locked` locally. On hosts inheriting `NO_COLOR`, clear it for
 snapshot tests. The client has additional real-LSP and packaged VS Code tests.
 Editor integration tests are static tooling tests, not native-engine evidence.
+
+## Static config checks with `__EXEC` (v1.22.1-lyl.7)
+
+The CLI and both saved and live language-server config checks consume balanced
+`__EXEC(...)` statements in the analysis input. The SQF body is opaque to HEMTT
+and its runtime effects remain unknown. Each invocation is surfaced as note
+`PN1`. Malformed delimiters and surrounding preprocessing and config errors
+still fail validation. The SQF preprocessor keeps its strict `PE25` behavior.
+
+Configs containing active invocations stay as original text in the PBO so
+Arma executes them when loading the config. A CLI regression checks the packed
+config and included header byte for byte, and checks that a config error after
+the invocation is still reported.
 
 ## Local performance work (2026-10-16)
 

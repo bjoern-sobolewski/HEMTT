@@ -79,7 +79,7 @@ async fn check_addon(source: WorkspacePath, workspace: EditorWorkspace) {
     #[allow(clippy::or_fun_call)]
     let processed = {
         let _timer = crate::performance::Timer::start("config.preprocess");
-        Processor::run_with_sources(
+        Processor::run_config_with_sources(
             &source,
             config
                 .as_ref()
